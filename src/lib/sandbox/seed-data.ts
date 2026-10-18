@@ -149,11 +149,14 @@ export const APEX_PAYABLES_AP: ApPayableInput[] = [
   },
   {
     id: "AP-PAYROLL",
-    supplier_name: "Payroll run (34 staff)",
+    // $68,000/mo = $816k/yr of wages on $2.22M of annual revenue: a coherent
+    // labour load for a 100-head precision plant, which "34 staff" was not.
+    supplier_name: "Monthly factory payroll (100 staff)",
     amount: 68_000,
     due_day: 14,
     late_fee_pct: 0.02,
     is_critical: true,
+    is_payroll: true,
     default_penalty: 18_000,
   },
   {
@@ -228,6 +231,7 @@ export const APEX_PROFILE = {
   minimumSafeBuffer: 25_000,
   creditScore: 672,
   monthlyRevenue: 310_000,
+  grossMargin: 0.35,
   maxRelationshipRisk: 0.4,
   relationshipRiskPrice: 2_000,
   horizonDays: 30,
@@ -241,6 +245,7 @@ export function apexFinancialState(): SmeFinancialState {
     minimum_safe_buffer: APEX_PROFILE.minimumSafeBuffer,
     credit_score: APEX_PROFILE.creditScore,
     monthly_revenue: APEX_PROFILE.monthlyRevenue,
+    gross_margin: APEX_PROFILE.grossMargin,
     horizon_days: APEX_PROFILE.horizonDays,
     max_relationship_risk: APEX_PROFILE.maxRelationshipRisk,
     relationship_risk_price: APEX_PROFILE.relationshipRiskPrice,
@@ -248,6 +253,303 @@ export function apexFinancialState(): SmeFinancialState {
     payables_ap: APEX_PAYABLES_AP,
     financing_options: APEX_FINANCING_OPTIONS,
   };
+}
+
+// ------------------------------------------------------- the other two sandboxes
+//
+// A demo that only ever shows one solvable crisis proves the optimiser can
+// solve that crisis. These two exist so the same code path has to say "no
+// action needed" and "this is past working capital" without being told.
+
+/** Precision Carton & Pack — healthy. Nothing for the optimiser to do. */
+const PRECISION_STATE: SmeFinancialState = {
+  company_name: "Precision Carton & Pack Ltd.",
+  current_cash: 88_000,
+  minimum_safe_buffer: 25_000,
+  credit_score: 735,
+  monthly_revenue: 240_000,
+  gross_margin: 0.32,
+  horizon_days: 30,
+  max_relationship_risk: 0.5,
+  relationship_risk_price: 2_000,
+  invoices_ar: [
+    {
+      id: "INV-3001",
+      customer_name: "Lakeside Print Group",
+      amount: 29_000,
+      due_day: 4,
+      expected_delay_days_mean: 2,
+      expected_delay_days_std: 1,
+      reliability_score: 0.98,
+      early_payment_discount_eligible: true,
+      early_payment_discount_pct: 0.015,
+      early_payment_settles_in_days: 2,
+    },
+    {
+      id: "INV-3002",
+      customer_name: "Orchard Foods",
+      amount: 24_000,
+      due_day: 9,
+      expected_delay_days_mean: 3,
+      expected_delay_days_std: 1.5,
+      reliability_score: 0.97,
+    },
+    {
+      id: "INV-3003",
+      customer_name: "Tidewater Retail",
+      amount: 21_000,
+      due_day: 16,
+      expected_delay_days_mean: 4,
+      expected_delay_days_std: 2,
+      reliability_score: 0.95,
+    },
+    {
+      id: "INV-3004",
+      customer_name: "Summit Pharma Packaging",
+      amount: 18_000,
+      due_day: 23,
+      expected_delay_days_mean: 3,
+      expected_delay_days_std: 1.5,
+      reliability_score: 0.96,
+    },
+  ],
+  payables_ap: [
+    { id: "AP-RENT", supplier_name: "Kiln Road Units (rent)", amount: 7_000, due_day: 3, late_fee_pct: 0.05 },
+    {
+      id: "AP-UTILITIES",
+      supplier_name: "Coastal Power",
+      amount: 3_100,
+      due_day: 7,
+      is_flexible: true,
+      max_deferral_days: 14,
+      deferral_fee_pct: 0.01,
+      relationship_risk: 0.1,
+      late_fee_pct: 0.04,
+    },
+    {
+      id: "AP-BOARD",
+      supplier_name: "Northgate Paperboard",
+      amount: 18_000,
+      due_day: 11,
+      is_flexible: true,
+      max_deferral_days: 21,
+      deferral_fee_pct: 0.005,
+      relationship_risk: 0.2,
+      late_fee_pct: 0.06,
+    },
+    {
+      id: "AP-PAYROLL",
+      supplier_name: "Monthly plant payroll (42 staff)",
+      amount: 34_000,
+      due_day: 15,
+      late_fee_pct: 0.02,
+      is_critical: true,
+      is_payroll: true,
+      default_penalty: 9_000,
+    },
+    {
+      id: "AP-TAX",
+      supplier_name: "Quarterly VAT remittance",
+      amount: 9_000,
+      due_day: 24,
+      late_fee_pct: 0.1,
+      is_critical: true,
+      default_penalty: 2_500,
+    },
+  ],
+  financing_options: [
+    {
+      id: "FIN-COASTAL-LOC",
+      provider: "Coastal Mutual (revolving line)",
+      product_type: "line_of_credit",
+      max_amount: 60_000,
+      apr: 0.09,
+      origination_fee_pct: 0.005,
+      min_credit_score: 700,
+      funding_days: 3,
+    },
+    {
+      id: "FIN-MERIDIAN",
+      provider: "Meridian Capital",
+      product_type: "invoice_factoring",
+      max_amount: 50_000,
+      apr: 0.14,
+      origination_fee_pct: 0.02,
+      min_credit_score: 640,
+      funding_days: 4,
+      requires_ar_collateral: true,
+      ar_coverage_ratio: 0.8,
+    },
+  ],
+};
+
+/** Midland Die-Cast — past working capital. The levers do not reach. */
+const MIDLAND_STATE: SmeFinancialState = {
+  company_name: "Midland Die-Cast Corp.",
+  current_cash: 28_000,
+  minimum_safe_buffer: 25_000,
+  credit_score: 640,
+  monthly_revenue: 195_000,
+  gross_margin: 0.22,
+  horizon_days: 30,
+  max_relationship_risk: 0.5,
+  relationship_risk_price: 2_000,
+  invoices_ar: [
+    {
+      id: "INV-4001",
+      customer_name: "Keystone Castings",
+      amount: 38_000,
+      due_day: 14,
+      expected_delay_days_mean: 12,
+      expected_delay_days_std: 6,
+      reliability_score: 0.6,
+      early_payment_discount_eligible: true,
+      early_payment_discount_pct: 0.03,
+      early_payment_settles_in_days: 4,
+    },
+    {
+      id: "INV-4002",
+      customer_name: "Dunmore Equipment",
+      amount: 22_000,
+      due_day: 20,
+      expected_delay_days_mean: 10,
+      expected_delay_days_std: 5,
+      reliability_score: 0.65,
+      early_payment_discount_eligible: true,
+      early_payment_discount_pct: 0.03,
+      early_payment_settles_in_days: 5,
+    },
+    {
+      id: "INV-4003",
+      customer_name: "Beltline Transit Works",
+      amount: 16_000,
+      due_day: 6,
+      expected_delay_days_mean: 8,
+      expected_delay_days_std: 4,
+      reliability_score: 0.7,
+    },
+  ],
+  payables_ap: [
+    {
+      id: "AP-FURNACE",
+      supplier_name: "Thermec Furnace Services (line-stop)",
+      amount: 55_000,
+      due_day: 10,
+      late_fee_pct: 0.1,
+      is_critical: true,
+      default_penalty: 20_000,
+    },
+    {
+      id: "AP-PAYROLL",
+      supplier_name: "Monthly foundry payroll (130 staff)",
+      amount: 95_000,
+      due_day: 10,
+      late_fee_pct: 0.02,
+      is_critical: true,
+      is_payroll: true,
+      default_penalty: 24_000,
+    },
+    { id: "AP-RENT", supplier_name: "Canal Street Works (rent)", amount: 11_000, due_day: 12, late_fee_pct: 0.05 },
+    {
+      id: "AP-TAX-ARREARS",
+      supplier_name: "VAT arrears instalment",
+      amount: 26_000,
+      due_day: 18,
+      late_fee_pct: 0.12,
+      is_critical: true,
+      default_penalty: 8_000,
+    },
+  ],
+  financing_options: [
+    {
+      id: "FIN-MIDLAND-FACTOR",
+      provider: "Midland Receivables Finance",
+      product_type: "invoice_factoring",
+      max_amount: 40_000,
+      apr: 0.28,
+      origination_fee_pct: 0.03,
+      min_credit_score: 640,
+      funding_days: 5,
+      requires_ar_collateral: true,
+      ar_coverage_ratio: 0.5,
+    },
+    {
+      id: "FIN-REGIONAL-BANK",
+      provider: "Regional Commercial Bank",
+      product_type: "bridge_loan",
+      max_amount: 80_000,
+      apr: 0.12,
+      origination_fee_pct: 0.015,
+      min_credit_score: 700, // above Midland's 640 -> screened out
+      funding_days: 9,
+    },
+    {
+      id: "FIN-RAPID-MCA",
+      provider: "RapidFloat Advance",
+      product_type: "merchant_advance",
+      max_amount: 35_000,
+      apr: 0.59,
+      origination_fee_pct: 0.05,
+      min_credit_score: 500,
+      funding_days: 3,
+    },
+  ],
+};
+
+export type SmeProfileId = "SME_APEX" | "SME_PRECISION" | "SME_MIDLAND";
+export const DEFAULT_SME_PROFILE: SmeProfileId = "SME_APEX";
+
+export interface SmeSandboxProfile {
+  id: SmeProfileId;
+  industry: string;
+  /** The band the dataset is shaped to produce, asserted by the tests. */
+  alert_band: "GREEN" | "RED" | "BLACK";
+  headline: string;
+  state: SmeFinancialState;
+  /** Untrusted memo text keyed by invoice. Only Apex carries the planted one. */
+  memos: Record<string, string>;
+}
+
+export const SME_PROFILES: Record<SmeProfileId, SmeSandboxProfile> = {
+  SME_APEX: {
+    id: "SME_APEX",
+    industry: APEX_PROFILE.industry,
+    alert_band: "RED",
+    headline: "Day-14 payroll collision. Solvable, but only if the levers are pulled in time.",
+    state: apexFinancialState(),
+    memos: APEX_INVOICE_MEMOS,
+  },
+  SME_PRECISION: {
+    id: "SME_PRECISION",
+    industry: "Folding Carton & Packaging",
+    alert_band: "GREEN",
+    headline: "Receivables are staggered and cover every outflow. No recovery action required.",
+    state: PRECISION_STATE,
+    memos: {},
+  },
+  SME_MIDLAND: {
+    id: "SME_MIDLAND",
+    industry: "Ferrous Die-Casting",
+    alert_band: "BLACK",
+    headline: "Structural deficit on day 10. No lever set closes it — this is a workout, not a bridge.",
+    state: MIDLAND_STATE,
+    memos: {},
+  },
+};
+
+/**
+ * Narrow an untrusted query string to a known profile, defaulting to Apex.
+ *
+ * `Object.hasOwn`, not `in`: `"__proto__" in SME_PROFILES` is true for any
+ * object literal, so `in` would wave through a value that then indexes to
+ * undefined.
+ */
+export function parseSmeProfileId(value: string | null | undefined): SmeProfileId {
+  return value && Object.hasOwn(SME_PROFILES, value) ? (value as SmeProfileId) : DEFAULT_SME_PROFILE;
+}
+
+export function smeFinancialState(profileId: SmeProfileId = DEFAULT_SME_PROFILE): SmeFinancialState {
+  return SME_PROFILES[profileId].state;
 }
 
 // ------------------------------------------------- Prisma seeding / memory fallback
@@ -317,17 +619,22 @@ export const IN_MEMORY_PROFILE_ID = "apex-in-memory";
  * the client has been generated (`npx prisma db push && npx prisma generate`);
  * otherwise returns the same shape backed by the in-memory constants above.
  */
-export async function seedApexDataset(): Promise<SeedResult> {
+export async function seedApexDataset(
+  profileId: SmeProfileId = DEFAULT_SME_PROFILE,
+): Promise<SeedResult> {
+  const profile = SME_PROFILES[profileId];
   const base: SeedResult = {
     mode: "in-memory",
-    smeProfileId: IN_MEMORY_PROFILE_ID,
-    invoices: APEX_INVOICES_AR.length,
-    payables: APEX_PAYABLES_AP.length,
-    financingOptions: APEX_FINANCING_OPTIONS.length,
-    quarantinedMemos: Object.keys(APEX_INVOICE_MEMOS),
+    smeProfileId: profileId === DEFAULT_SME_PROFILE ? IN_MEMORY_PROFILE_ID : `${profileId.toLowerCase()}-in-memory`,
+    invoices: profile.state.invoices_ar.length,
+    payables: profile.state.payables_ap.length,
+    financingOptions: profile.state.financing_options.length,
+    quarantinedMemos: Object.keys(profile.memos),
   };
 
-  const prisma = await getPrismaClient();
+  // Only the canonical Apex dataset has a Supabase row; the other two sandboxes
+  // exist to exercise the GREEN and BLACK code paths and stay in memory.
+  const prisma = profileId === DEFAULT_SME_PROFILE ? await getPrismaClient() : null;
   if (!prisma) return base;
 
   try {

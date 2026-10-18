@@ -2,9 +2,10 @@
 
 /** Tab 2 — Recovery Optimizer: three priced counterfactuals and the lender screen. */
 
-import { BadgeCheck, Ban, CircleDollarSign, TrendingDown } from "lucide-react";
+import { ArrowRight, BadgeCheck, Ban, CircleDollarSign, ShieldCheck, TrendingDown } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -66,6 +67,8 @@ function PlanCard({
   tone,
   icon,
   savings,
+  recommended,
+  onApprove,
 }: {
   data: DashboardState;
   plan: RecoveryPlanResult;
@@ -76,22 +79,27 @@ function PlanCard({
   tone: "good" | "warn" | "bad";
   icon: React.ReactNode;
   savings?: string;
+  /** Exactly one card carries the ring. The others are evidence, not options. */
+  recommended?: boolean;
+  onApprove?: () => void;
 }) {
   const risk = riskScore(data, plan);
   const apr = impliedApr(plan.total_cost, plan.cash_raised);
-  const ring = {
-    good: "border-emerald-300 dark:border-emerald-800",
-    warn: "border-amber-300 dark:border-amber-800",
-    bad: "border-rose-300 dark:border-rose-800",
-  }[tone];
   const costTone = {
     good: "text-emerald-600 dark:text-emerald-400",
     warn: "text-amber-600 dark:text-amber-400",
     bad: "text-rose-600 dark:text-rose-400",
   }[tone];
+  const costRatio = plan.cash_raised > 0 ? plan.total_cost / plan.cash_raised : 0;
 
   return (
-    <Card className={cn("border-2", ring)}>
+    <Card
+      className={cn(
+        recommended
+          ? "ring-1 ring-emerald-500 dark:ring-emerald-500"
+          : "border-slate-200 dark:border-slate-800",
+      )}
+    >
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -103,7 +111,13 @@ function PlanCard({
         <div className={cn("text-3xl font-semibold tabular-nums tracking-tight", costTone)}>
           {money2(plan.total_cost)}
         </div>
+        {plan.cash_raised > 0 ? (
+          <div className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+            {pct(costRatio, 1)} of cash raised ({money2(plan.total_cost)} total · {pct(apr, 1)} annualised)
+          </div>
+        ) : null}
         <CardDescription className="text-xs">{caption}</CardDescription>
+        {plan.breaches_statutory_payroll ? <PayrollBreachCallout data={data} /> : null}
         {savings ? (
           <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{savings}</div>
         ) : null}
@@ -142,7 +156,7 @@ function PlanCard({
           {plan.actions.map((action, index) => (
             <div
               key={`${action.kind}-${action.target_id}-${index}`}
-              className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-slate-800 dark:bg-slate-900/40"
+              className="rounded-md border border-slate-200 bg-slate-50/60 p-2.5 dark:border-slate-800 dark:bg-slate-900/40"
             >
               <div className="flex items-baseline justify-between gap-2 text-xs">
                 <span className="font-medium">{action.label}</span>
@@ -151,18 +165,153 @@ function PlanCard({
               <div className="mt-0.5 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
                 {action.detail}
               </div>
+              {/* The modality is the point: these are offers, not outcomes. A
+                  counterparty has to say yes before any of this is money. */}
+              {COUNTERPARTY_ASSUMPTION[action.kind] ? (
+                <div className="mt-1 text-[11px] italic text-slate-500 dark:text-slate-400">
+                  ↳ {COUNTERPARTY_ASSUMPTION[action.kind]}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
         <p className="text-[11px] text-slate-500 dark:text-slate-400">{plan.notes}</p>
+        {recommended && onApprove && plan.feasible ? (
+          <Button size="sm" onClick={onApprove} className="w-fit text-[11px]">
+            Approve in the action center
+            <ArrowRight className="size-3.5" />
+          </Button>
+        ) : null}
       </CardContent>
     </Card>
   );
 }
 
-export function RecoveryOptimizer({ data }: { data: DashboardState }) {
+/** What each lever assumes about someone who has not agreed to it yet. */
+const COUNTERPARTY_ASSUMPTION: Record<string, string> = {
+  ar_early_discount: "if the customer accepts the discount · offer drafted, not sent",
+  ap_deferral: "if the supplier agrees to the new date · request drafted, not sent",
+  bridge_draw: "if underwriting confirms the quote · match-clean on the deterministic screen",
+};
+
+function PayrollBreachCallout({ data }: { data: DashboardState }) {
+  const payroll = data.state.payables_ap.find((p) => p.is_payroll);
+  return (
+    <div className="rounded-md border border-slate-900 bg-slate-900 px-2.5 py-2 text-slate-100 dark:border-slate-100/20">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-rose-400">
+        <Ban className="size-3.5 shrink-0" />
+        Statutory payroll breach (infeasible)
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+        Missing the {money(payroll?.amount ?? 0)} {payroll?.supplier_name ?? "payroll run"} is a statutory and
+        operational failure, not a late fee you can buy. This baseline is priced for comparison only — it is
+        not an option the owner may choose at any price.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * What waiting costs.
+ *
+ * A step curve, not a line: the cost does not drift upward, it jumps when a
+ * lever expires. Each step names the lever that closed to cause it.
+ */
+function ProcrastinationCurve({ data }: { data: DashboardState }) {
+  const points = data.procrastination_curve;
+  if (points.length === 0) return null;
+  const feasibleCosts = points.map((p) => p.total_cost).filter((c): c is number => c !== null);
+  const peak = Math.max(...feasibleCosts, 1);
+
+  return (
+    <Card className="border-slate-200 dark:border-slate-800">
+      <CardHeader>
+        <SectionHeading
+          title="The cost of procrastination"
+          hint={`same ${money(data.optimization.required_cash)} gap, fewer ways to close it`}
+        />
+        <CardDescription className="text-xs">
+          Each horizon re-runs the optimiser with only the levers an owner who waited that long still has.
+          The gap never moves; the means of closing it expire one at a time.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1.5">
+        {points.map((point) => {
+          const width = point.total_cost === null ? 100 : Math.max((point.total_cost / peak) * 100, 2);
+          return (
+            <div key={point.day_waited} className="grid gap-1 sm:grid-cols-[11rem_1fr_7rem] sm:items-center">
+              <div className="text-xs font-medium tabular-nums">
+                {point.label}
+                <span className="ml-1 font-normal text-slate-400">{point.days_remaining}d left</span>
+              </div>
+              <div className="h-5 w-full overflow-hidden rounded-sm bg-slate-100 dark:bg-slate-900">
+                <div
+                  className={cn(
+                    "h-full rounded-sm transition-[width] duration-500",
+                    point.total_cost === null
+                      ? "bg-slate-900 dark:bg-slate-200"
+                      : point.total_cost > (feasibleCosts[0] ?? 0) * 2
+                        ? "bg-amber-500"
+                        : "bg-emerald-500",
+                  )}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+              <div
+                className={cn(
+                  "text-right text-xs font-semibold tabular-nums",
+                  point.total_cost === null
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-slate-900 dark:text-slate-100",
+                )}
+              >
+                {point.total_cost === null ? "INFEASIBLE" : money2(point.total_cost)}
+              </div>
+              <div className="text-[11px] text-slate-500 sm:col-span-3 sm:pl-[11rem] dark:text-slate-400">
+                ↳ {point.expired_lever}
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The lender screen, grouped by what it means for the owner.
+ *
+ * A rejection here is the product working: it is the screen refusing to spend
+ * the SME's credit file or its time on a facility that cannot help.
+ */
+function PROTECTIVE_REASON(
+  option: DashboardState["optimization"]["matched_financing_options"][number],
+  crunchDay: number,
+): string {
+  const reason = option.rejection_reason ?? "";
+  const late = reason.match(/funds in (\d+)d/);
+  if (late) {
+    const days = Number(late[1]) - crunchDay;
+    return `Too slow — funds in ${late[1]}d, arriving ${days} day${days === 1 ? "" : "s"} after your day-${crunchDay} payroll run.`;
+  }
+  const credit = reason.match(/credit score (\d+) below minimum (\d+)/);
+  if (credit) {
+    return `Credit score ${credit[1]} < ${credit[2]} minimum — blocks a wasted hard credit pull.`;
+  }
+  return reason || "Screened out.";
+}
+
+export function RecoveryOptimizer({
+  data,
+  onApprove,
+}: {
+  data: DashboardState;
+  onApprove?: () => void;
+}) {
   const o = data.optimization;
   const matched = o.matched_financing_options;
+  const eligible = matched.filter((m) => m.eligible);
+  const screened = matched.filter((m) => !m.eligible);
 
   return (
     <div className="flex flex-col gap-4">
@@ -170,11 +319,17 @@ export function RecoveryOptimizer({ data }: { data: DashboardState }) {
         <PlanCard
           data={data}
           plan={o.optimal_plan}
+          recommended
+          onApprove={onApprove}
           title="Optimal recovery plan"
           caption={`Minimum-cost mix closing the ${money(o.required_cash)} day-${o.crunch_day} gap.`}
-          savings={`Saves ${money2(o.savings_vs_naive)} vs naive borrowing · ${money2(
-            o.savings_vs_do_nothing,
-          )} vs doing nothing`}
+          savings={
+            o.optimal_plan.feasible
+              ? `Saves ${money2(o.savings_vs_naive)} vs naive borrowing · ${money2(
+                  o.savings_vs_do_nothing,
+                )} vs doing nothing`
+              : undefined
+          }
           method={
             data.engine.optimization_source === "python-fastapi"
               ? `MILP · HiGHS · ${o.solver_status}`
@@ -206,11 +361,13 @@ export function RecoveryOptimizer({ data }: { data: DashboardState }) {
         />
       </div>
 
+      <ProcrastinationCurve data={data} />
+
       <Card className="border-slate-200 dark:border-slate-800">
         <CardHeader>
           <SectionHeading
             title="Financing eligibility & affordability matrix"
-            hint={`${matched.filter((m) => m.eligible).length} of ${matched.length} facilities eligible`}
+            hint={`${eligible.length} available to you · ${screened.length} screened out to protect you`}
           />
           <CardDescription className="text-xs">
             Screening order is fixed and deterministic: credit score, then funding speed against the day-
@@ -233,10 +390,32 @@ export function RecoveryOptimizer({ data }: { data: DashboardState }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {matched.map((option) => {
-                const quoted = data.state.financing_options.find((f) => f.id === option.id);
-                const used = o.optimal_plan.actions.find((a) => a.target_id === option.id);
-                return (
+              {[
+                { rows: eligible, label: `Available to you (${eligible.length})`, good: true },
+                { rows: screened, label: `Screened out to protect you (${screened.length})`, good: false },
+              ].flatMap((group) => [
+                group.rows.length ? (
+                  <TableRow key={group.label} className="hover:bg-transparent">
+                    <TableCell
+                      colSpan={9}
+                      className={cn(
+                        "bg-slate-50 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] dark:bg-slate-900/60",
+                        group.good
+                          ? "text-emerald-700 dark:text-emerald-400"
+                          : "text-slate-500 dark:text-slate-400",
+                      )}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        {group.good ? <BadgeCheck className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
+                        {group.label}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ) : null,
+                ...group.rows.map((option) => {
+                  const quoted = data.state.financing_options.find((f) => f.id === option.id);
+                  const used = o.optimal_plan.actions.find((a) => a.target_id === option.id);
+                  return (
                   <TableRow
                     key={option.id}
                     className={cn(
@@ -266,21 +445,26 @@ export function RecoveryOptimizer({ data }: { data: DashboardState }) {
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{money(option.max_available)}</TableCell>
                     <TableCell className="text-right tabular-nums">{money2(option.effective_cost_30d)}</TableCell>
-                    <TableCell>
+                    <TableCell className="min-w-[18rem]">
                       {option.eligible ? (
                         <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
                           <BadgeCheck className="size-3" />
                           {used ? `matched · ${money2(used.cash_impact)} drawn` : "eligible"}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400">
-                          <Ban className="size-3 shrink-0" /> rejected — {option.rejection_reason}
+                        // Second person, and the consequence rather than the
+                        // predicate: a rejection should feel like cover, not
+                        // like the owner failing a test.
+                        <span className="inline-flex items-start gap-1 text-slate-600 dark:text-slate-400">
+                          <Ban className="mt-0.5 size-3 shrink-0" />
+                          {PROTECTIVE_REASON(option, o.crunch_day)}
                         </span>
                       )}
                     </TableCell>
                   </TableRow>
-                );
-              })}
+                  );
+                }),
+              ])}
             </TableBody>
           </Table>
         </CardContent>

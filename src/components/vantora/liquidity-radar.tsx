@@ -3,7 +3,7 @@
 /** Tab 1 — Liquidity Radar: where the cash breaks, and what it breaks on. */
 
 import { useState } from "react";
-import { AlertTriangle, ShieldAlert, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,12 +28,95 @@ function reliabilityTone(score: number) {
   return "text-rose-600 dark:text-rose-400";
 }
 
-export function LiquidityRadar({ data }: { data: DashboardState }) {
-  const [showRecovery, setShowRecovery] = useState(true);
+/** Two mutually exclusive states, shown as one control rather than a checkbox. */
+function Segmented({
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-slate-800 dark:bg-slate-900">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          disabled={disabled}
+          aria-pressed={option.value === value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "rounded px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition-colors disabled:opacity-60",
+            option.value === value
+              ? "bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-slate-100"
+              : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Mark the exact substrings the detectors fired on, inside the memo text. */
+function StruckMemo({ text, spans }: { text: string; spans: string[] }) {
+  // Longest first so an outer match wins over a substring of it.
+  const ordered = [...new Set(spans)].filter(Boolean).sort((a, b) => b.length - a.length);
+  let parts: (string | { hit: string })[] = [text];
+  for (const span of ordered) {
+    parts = parts.flatMap((part) => {
+      if (typeof part !== "string" || !part.includes(span)) return [part];
+      const pieces = part.split(span);
+      return pieces.flatMap((piece, index) => (index === 0 ? [piece] : [{ hit: span }, piece]));
+    });
+  }
+  return (
+    <p className="font-mono text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+      {parts.map((part, index) =>
+        typeof part === "string" ? (
+          <span key={index}>{part}</span>
+        ) : (
+          <span key={index} className="font-semibold text-rose-600 line-through decoration-rose-500 dark:text-rose-400">
+            {part.hit}
+          </span>
+        ),
+      )}
+    </p>
+  );
+}
+
+const RHO_STEPS = [
+  { value: "0", label: "0.0 Independent" },
+  { value: "0.3", label: "0.3 Moderate" },
+  { value: "0.6", label: "0.6 Sector stress" },
+];
+
+export function LiquidityRadar({
+  data,
+  rho,
+  onRhoChange,
+  busy,
+}: {
+  data: DashboardState;
+  rho: number;
+  onRhoChange: (next: number) => void;
+  busy: boolean;
+}) {
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [showQuantMath, setShowQuantMath] = useState(false);
+  const [openMemo, setOpenMemo] = useState<string | null>(null);
   const { forecast, optimization, state, memos } = data;
   const crunchDay = forecast.first_shortfall_day ?? optimization.crunch_day;
   const crunchP10 = forecast.p10_trajectory[crunchDay - 1];
   const wc = forecast.working_capital_metrics;
+  const meanSpread =
+    forecast.p90_trajectory.reduce((sum, v, i) => sum + (v - forecast.p10_trajectory[i]), 0) /
+    forecast.horizon_days;
 
   return (
     <div className="flex flex-col gap-4">
@@ -51,21 +134,24 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
           sublabel={`P50 ${money(forecast.p50_trajectory[crunchDay - 1])} · P90 ${money(
             forecast.p90_trajectory[crunchDay - 1],
           )}`}
-          tone="bad"
+          // Neutral on purpose. The verdict bar above owns the one large rose
+          // number on the page; these cards are the evidence behind it, and a
+          // second alarm-coloured figure makes neither of them mean anything.
+          tone="neutral"
           footnote={<DeterministicBadge method={`Monte Carlo · ${forecast.n_simulations.toLocaleString()} runs`} />}
         />
         <KpiCard
           label="Required buffer gap"
           value={money(optimization.required_cash)}
           sublabel={`Below the ${money(state.minimum_safe_buffer)} safe buffer on day ${crunchDay}`}
-          tone="bad"
+          tone="neutral"
           footnote={<DeterministicBadge method="P10 decomposition" />}
         />
         <KpiCard
           label="Shortfall probability"
           value={pct(forecast.shortfall_probability, 1)}
           sublabel={`of ${forecast.n_simulations.toLocaleString()} trajectories breach the buffer (seed ${forecast.seed})`}
-          tone={forecast.shortfall_probability > 0.5 ? "bad" : "warn"}
+          tone="neutral"
           footnote={<DeterministicBadge method={`Seeded · reproducible`} />}
         />
       </div>
@@ -78,28 +164,89 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
             with a log-normal dispute tail · {forecast.engine_source === "python-fastapi" ? "numpy/scipy" : "TS mirror"}
           </CardDescription>
           <div className="flex flex-wrap items-center gap-2 pt-1">
+            {/* An infeasible plan has no cost to offer, so there is no second
+                state to toggle into — saying "with the $0 plan" would claim one. */}
+            <Segmented
+              value={showRecovery ? "plan" : "nothing"}
+              disabled={!optimization.optimal_plan.feasible}
+              onChange={(next) => setShowRecovery(next === "plan")}
+              options={[
+                { value: "nothing", label: "If you do nothing" },
+                {
+                  value: "plan",
+                  label: optimization.optimal_plan.feasible
+                    ? `With the ${money(optimization.optimal_plan.total_cost)} plan`
+                    : "No feasible plan",
+                },
+              ]}
+            />
+            {showRecovery && optimization.optimal_plan.feasible ? (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-emerald-100 font-mono text-[10px] text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+              >
+                Restores to {money(optimization.optimal_plan.post_recovery_p10_balance)}
+              </Badge>
+            ) : null}
             <Button
               size="sm"
-              variant={showRecovery ? "default" : "outline"}
-              onClick={() => setShowRecovery((value) => !value)}
-            >
-              {showRecovery ? "Hide" : "Show"} post-recovery P10
-            </Button>
-            <Badge
               variant="outline"
-              className="border-transparent bg-emerald-100 font-mono text-[10px] text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+              className="text-[11px]"
+              onClick={() => setShowQuantMath((value) => !value)}
             >
-              Restores to {money(optimization.optimal_plan.post_recovery_p10_balance)}
-            </Badge>
+              {showQuantMath ? "Hide" : "Show"} P90 &amp; quant math
+            </Button>
+
+            <div className="ml-auto flex items-center gap-2">
+              <span
+                className="text-[11px] text-slate-500 dark:text-slate-400"
+                title="Systemic correlation between customer payment delays. Above zero the whole receivables book slips together."
+              >
+                Correlation ρ
+              </span>
+              <Segmented
+                value={String(rho)}
+                disabled={busy}
+                onChange={(next) => onRhoChange(Number(next))}
+                options={RHO_STEPS}
+              />
+              {busy ? <Loader2 className="size-3.5 animate-spin text-slate-400" /> : null}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <FanChart data={data} showRecovery={showRecovery} />
+          <FanChart data={data} showRecovery={showRecovery} showQuantMath={showQuantMath} />
+
+          {showQuantMath ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
+              <span>
+                Mean P90−P10 spread{" "}
+                <span className="font-medium tabular-nums text-slate-900 dark:text-slate-100">
+                  {money(meanSpread)}
+                </span>{" "}
+                at ρ={rho.toFixed(1)}
+              </span>
+              <span>
+                Day-{crunchDay} P10 95% CI{" "}
+                <span className="font-medium tabular-nums text-slate-900 dark:text-slate-100">
+                  {money(forecast.p10_ci_95[0])} … {money(forecast.p10_ci_95[1])}
+                </span>
+                {forecast.p10_ci_95[0] === forecast.p10_ci_95[1] ? (
+                  <span className="text-slate-400"> (zero width — no invoice can land in that window)</span>
+                ) : null}
+              </span>
+              <span className="font-mono">
+                seed {forecast.seed} · {forecast.n_simulations.toLocaleString()} runs
+              </span>
+            </div>
+          ) : null}
+
+          {/* Working-capital facts are context, not alarms: neutral ink. */}
           <div className="mt-2 grid gap-x-8 gap-y-0 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Days sales outstanding" value={`${wc.days_sales_outstanding} d`} tone="warn" />
-            <Metric label="Days payable outstanding" value={`${wc.days_payable_outstanding} d`} />
-            <Metric label="Cash conversion gap" value={`${wc.cash_conversion_gap_days} d`} tone="warn" />
-            <Metric label="P50 runway" value={`${wc.runway_days_p50} d`} tone="bad" />
+            <Metric label="Days sales outstanding" value={`${wc.days_sales_outstanding} d`} />
+            <Metric label="Days payable outstanding (COGS)" value={`${wc.days_payable_outstanding} d`} />
+            <Metric label="Cash conversion gap" value={`${wc.cash_conversion_gap_days} d`} />
+            <Metric label="P50 runway" value={`${wc.runway_days_p50} d`} />
           </div>
         </CardContent>
       </Card>
@@ -131,12 +278,13 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {state.invoices_ar.map((invoice) => {
+                {state.invoices_ar.flatMap((invoice) => {
                   const memo = memos.find((m) => m.invoice_id === invoice.id);
                   const inPlan = optimization.optimal_plan.actions.some(
                     (a) => a.target_id === invoice.id && a.kind === "ar_early_discount",
                   );
-                  return (
+                  const expanded = openMemo === invoice.id;
+                  return [
                     <TableRow key={invoice.id} className={cn(inPlan && "bg-emerald-50/60 dark:bg-emerald-950/20")}>
                       <TableCell className="font-medium">
                         <div className="whitespace-nowrap">{invoice.id}</div>
@@ -170,17 +318,51 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             <ShieldCheck className="size-3" /> none
                           </span>
                         ) : memo.quarantined ? (
-                          <span className="inline-flex items-center gap-1 font-medium text-rose-600 dark:text-rose-400">
+                          <button
+                            type="button"
+                            onClick={() => setOpenMemo(expanded ? null : invoice.id)}
+                            aria-expanded={expanded}
+                            className="inline-flex items-center gap-1 rounded font-medium text-rose-600 underline decoration-dotted underline-offset-2 hover:text-rose-700 dark:text-rose-400"
+                          >
                             <ShieldAlert className="size-3" /> quarantined
-                          </span>
+                            <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} />
+                          </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                             <ShieldCheck className="size-3" /> clean
                           </span>
                         )}
                       </TableCell>
-                    </TableRow>
-                  );
+                    </TableRow>,
+                    expanded && memo ? (
+                      <TableRow key={`${invoice.id}-memo`} className="bg-rose-50/60 hover:bg-rose-50/60 dark:bg-rose-950/20">
+                        <TableCell colSpan={8} className="p-3">
+                          <div className="rounded-md border border-rose-200 bg-white p-3 dark:border-rose-900 dark:bg-slate-950">
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                              <span className="font-medium text-rose-700 dark:text-rose-300">
+                                Raw memo text as received — severity {memo.severity}
+                              </span>
+                              {memo.matched_patterns.map((pattern) => (
+                                <Badge
+                                  key={pattern}
+                                  variant="outline"
+                                  className="border-rose-200 bg-rose-50 font-mono text-[10px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300"
+                                >
+                                  {pattern}
+                                </Badge>
+                              ))}
+                            </div>
+                            <div className="mt-2">
+                              <StruckMemo text={memo.sanitized_excerpt} spans={memo.matched_text} />
+                            </div>
+                            <p className="mt-2 text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                              Quarantined at data ingestion — never entered LLM context.
+                            </p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : null,
+                  ];
                 })}
               </TableBody>
             </Table>

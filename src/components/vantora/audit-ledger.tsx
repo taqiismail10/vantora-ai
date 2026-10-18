@@ -2,8 +2,8 @@
 
 /** Tab 4 — the verifiable execution ledger: logs/sandbox_operation_logs.jsonl, live. */
 
-import { useMemo, useState } from "react";
-import { Link2, Loader2, ShieldCheck, ShieldX } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Link2, Loader2, RotateCcw, ShieldCheck, ShieldX, Unlink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,39 +24,128 @@ import { verifyAuditChain } from "./client-api";
 import { DecisionBadge, SectionHeading, TierBadge } from "./primitives";
 
 const FILTERS = ["ALL", "ALLOWED", "DRAFTED", "DENIED"] as const;
+const GENESIS = "0".repeat(64);
+/** Slow enough to read as a scan, fast enough that 17 rows take under half a second. */
+const WALK_MS_PER_ROW = 25;
+const TAMPER_SEQ = 12;
+
+/** `2026-10-18T17:15:25.984Z` -> `2026-10-18 17:15:25` (ms moves to the detail view). */
+function toSeconds(timestamp: string): string {
+  return timestamp.replace("T", " ").replace(/\.\d+Z?$/, "");
+}
+
+/**
+ * Recompute the chain in the browser, the same way the server does.
+ *
+ * The tamper demo has to be verified client-side: the point is that anyone
+ * holding the file can detect the edit, without asking the service that wrote
+ * it whether it is still honest.
+ */
+async function verifyLocally(entries: AuditLogEntry[]): Promise<ChainVerification> {
+  let expectedPrev = GENESIS;
+  for (const [index, entry] of entries.entries()) {
+    if (entry.seq !== index + 1) {
+      return { valid: false, length: entries.length, brokenAtSeq: entry.seq, reason: "sequence gap or reorder" };
+    }
+    if (entry.prevLogHash !== expectedPrev) {
+      return { valid: false, length: entries.length, brokenAtSeq: entry.seq, reason: "broken link to previous entry" };
+    }
+    const preimage = [
+      entry.seq,
+      entry.timestamp,
+      entry.actorType,
+      entry.actorId,
+      entry.operation,
+      entry.tier,
+      entry.decision,
+      entry.reason,
+      entry.payloadDigest,
+      entry.prevLogHash,
+    ].join("|");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(preimage));
+    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (hex !== entry.currentLogHash) {
+      return { valid: false, length: entries.length, brokenAtSeq: entry.seq, reason: "entry contents were altered" };
+    }
+    expectedPrev = entry.currentLogHash;
+  }
+  return { valid: true, length: entries.length, brokenAtSeq: null, reason: null };
+}
 
 export function AuditLedger({ data }: { data: DashboardState }) {
   const [entries, setEntries] = useState<AuditLogEntry[]>(data.audit.entries);
   const [verification, setVerification] = useState<ChainVerification>(data.audit.verification);
   const [verifying, setVerifying] = useState(false);
+  const [walkedTo, setWalkedTo] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [tampered, setTampered] = useState(false);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("ALL");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const pristine = useRef<AuditLogEntry[]>(data.audit.entries);
 
-  // The incoming props win whenever the parent refetches after an action.
-  const shown = useMemo(() => {
-    const source = data.audit.entries.length >= entries.length ? data.audit.entries : entries;
-    return filter === "ALL" ? source : source.filter((entry) => entry.decision === filter);
-  }, [data.audit.entries, entries, filter]);
+  // The incoming props win whenever the parent refetches after an action —
+  // unless the tamper demo is running, which is deliberately local state.
+  const source = useMemo(() => {
+    if (tampered) return entries;
+    return data.audit.entries.length >= entries.length ? data.audit.entries : entries;
+  }, [data.audit.entries, entries, tampered]);
 
-  const counts = useMemo(() => {
-    const source = data.audit.entries.length >= entries.length ? data.audit.entries : entries;
-    return {
+  const shown = useMemo(
+    () => (filter === "ALL" ? source : source.filter((entry) => entry.decision === filter)),
+    [source, filter],
+  );
+
+  const counts = useMemo(
+    () => ({
       total: source.length,
       allowed: source.filter((e) => e.decision === "ALLOWED").length,
       drafted: source.filter((e) => e.decision === "DRAFTED").length,
       denied: source.filter((e) => e.decision === "DENIED").length,
-    };
-  }, [data.audit.entries, entries]);
+    }),
+    [source],
+  );
 
-  const verify = async () => {
+  /** Walk the rows one at a time so the recomputation is something you watch. */
+  const walk = async (rows: AuditLogEntry[], check: () => Promise<ChainVerification>) => {
     setVerifying(true);
-    try {
+    setElapsedMs(null);
+    const started = performance.now();
+    const result = await check();
+    const stopAt = result.valid ? rows.length : (result.brokenAtSeq ?? rows.length);
+    for (let i = 1; i <= stopAt; i++) {
+      setWalkedTo(i);
+      await new Promise((resolve) => setTimeout(resolve, WALK_MS_PER_ROW));
+    }
+    setElapsedMs(Math.round(performance.now() - started - stopAt * WALK_MS_PER_ROW));
+    setVerification(result);
+    setVerifying(false);
+  };
+
+  const verify = () =>
+    walk(source, async () => {
+      if (tampered) return verifyLocally(entries);
       const result = await verifyAuditChain();
       setEntries(result.entries);
-      setVerification(result.verification);
-    } finally {
-      setVerifying(false);
-    }
+      pristine.current = result.entries;
+      return result.verification;
+    });
+
+  /** Flip one character of entry #12's reason, in memory only. */
+  const tamper = () => {
+    const edited = pristine.current.map((entry) =>
+      entry.seq === TAMPER_SEQ ? { ...entry, reason: entry.reason.replace(/^./, (c) => (c === "T" ? "t" : "X")) } : entry,
+    );
+    setEntries(edited);
+    setTampered(true);
+    setExpanded(TAMPER_SEQ);
+    void walk(edited, () => verifyLocally(edited));
+  };
+
+  const restore = () => {
+    setEntries(pristine.current);
+    setTampered(false);
+    setExpanded(null);
+    void walk(pristine.current, () => verifyLocally(pristine.current));
   };
 
   const download = () => {
@@ -68,6 +157,8 @@ export function AuditLedger({ data }: { data: DashboardState }) {
     anchor.click();
     URL.revokeObjectURL(url);
   };
+
+  const brokenAt = verification.valid ? null : verification.brokenAtSeq;
 
   return (
     <Card className="border-slate-200 dark:border-slate-800">
@@ -85,11 +176,31 @@ export function AuditLedger({ data }: { data: DashboardState }) {
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button size="sm" onClick={verify} disabled={verifying} className="text-[11px]">
             {verifying ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-            Verify SHA-256 chain integrity
+            {verifying ? `Verifying… ${walkedTo ?? 0} / ${source.length}` : "Verify SHA-256 chain integrity"}
           </Button>
+
+          {tampered ? (
+            <Button size="sm" variant="outline" onClick={restore} disabled={verifying} className="text-[11px]">
+              <RotateCcw className="size-4" />
+              Restore verified chain
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={tamper}
+              disabled={verifying || source.length < TAMPER_SEQ}
+              className="text-[11px]"
+            >
+              <Unlink className="size-4 text-slate-500" />
+              Simulate tamper on entry #{TAMPER_SEQ}
+            </Button>
+          )}
+
           <Button size="sm" variant="outline" onClick={download} className="text-[11px]">
             Download .jsonl
           </Button>
+
           <Badge
             variant="outline"
             className={cn(
@@ -101,7 +212,8 @@ export function AuditLedger({ data }: { data: DashboardState }) {
           >
             {verification.valid ? (
               <>
-                VERIFIED ({verification.length}/{verification.length})
+                ✓ {verification.length} of {verification.length} verified · chain intact from genesis
+                {elapsedMs !== null ? ` · recomputed in ~${Math.max(elapsedMs, 1)}ms` : ""}
               </>
             ) : (
               <>
@@ -109,6 +221,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
               </>
             )}
           </Badge>
+
           <span className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
             {counts.total} entries · {counts.allowed} allowed · {counts.drafted} drafted · {counts.denied} denied
           </span>
@@ -128,10 +241,20 @@ export function AuditLedger({ data }: { data: DashboardState }) {
         </div>
       </CardHeader>
       <CardContent className="px-0">
+        {!verification.valid ? (
+          <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+            <ShieldX className="mt-0.5 size-4 shrink-0" />
+            <span>
+              <span className="font-semibold">BROKEN at seq {verification.brokenAtSeq}</span> — {verification.reason}.
+              Chain broken from this point forward; every entry after it is untrustworthy.
+            </span>
+          </div>
+        ) : null}
+
         <Table className="text-xs">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12">seq</TableHead>
+              <TableHead className="w-16">seq</TableHead>
               <TableHead className="w-44">timestamp</TableHead>
               <TableHead>operation</TableHead>
               <TableHead>tier</TableHead>
@@ -141,54 +264,102 @@ export function AuditLedger({ data }: { data: DashboardState }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {shown.map((entry) => (
-              <TableRow
-                key={entry.currentLogHash}
-                onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
-                className={cn(
-                  "cursor-pointer",
-                  entry.decision === "DENIED" && "bg-rose-50/50 dark:bg-rose-950/20",
-                  entry.tier === "TIER_3_PROHIBITED" && "bg-rose-100/70 dark:bg-rose-950/40",
-                )}
-              >
-                <TableCell className="font-mono tabular-nums text-slate-400">{entry.seq}</TableCell>
-                <TableCell className="font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
-                  {entry.timestamp.replace("T", " ").replace("Z", "")}
-                </TableCell>
-                <TableCell className="font-medium">
-                  <div className="whitespace-nowrap">{entry.operation}</div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                    {entry.actorType}:{entry.actorId}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <TierBadge tier={entry.tier} />
-                </TableCell>
-                <TableCell>
-                  <DecisionBadge decision={entry.decision} />
-                </TableCell>
-                <TableCell className="max-w-[28rem] text-slate-600 dark:text-slate-400">
-                  <span className={cn(expanded === entry.seq ? "" : "line-clamp-2")}>{entry.reason}</span>
-                  {expanded === entry.seq ? (
-                    <div className="mt-2 flex flex-col gap-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-500">
-                      <span>payloadDigest {entry.payloadDigest}</span>
-                      <span className="flex items-center gap-1">
-                        prev {entry.prevLogHash} <Link2 className="size-3" />
-                      </span>
-                      <span>curr {entry.currentLogHash}</span>
-                    </div>
-                  ) : null}
-                </TableCell>
-                <TableCell className="font-mono text-[10px] text-slate-400">
-                  {entry.prevLogHash === "0".repeat(64) ? (
-                    <span className="text-emerald-600 dark:text-emerald-400">genesis</span>
-                  ) : (
-                    <>…{entry.prevLogHash.slice(-6)}</>
+            {shown.map((entry, index) => {
+              const after = brokenAt !== null && entry.seq > brokenAt;
+              const atBreak = brokenAt === entry.seq;
+              const scanning = verifying && walkedTo === entry.seq;
+              const walked = walkedTo !== null && entry.seq <= walkedTo && !after && !atBreak;
+              return (
+                <TableRow
+                  key={`${entry.seq}-${entry.currentLogHash}`}
+                  onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
+                  className={cn(
+                    "cursor-pointer transition-colors",
+                    entry.decision === "DENIED" && "bg-rose-50/50 dark:bg-rose-950/20",
+                    entry.tier === "TIER_3_PROHIBITED" && "bg-rose-100/70 dark:bg-rose-950/40",
+                    scanning && "bg-emerald-100/80 dark:bg-emerald-900/40",
+                    atBreak && "bg-rose-100 dark:bg-rose-950/60",
+                    // Everything after the break is unverifiable, not merely wrong.
+                    after && "opacity-40",
                   )}
-                  <div>→ …{entry.currentLogHash.slice(-6)}</div>
-                </TableCell>
-              </TableRow>
-            ))}
+                >
+                  <TableCell className="font-mono tabular-nums text-slate-400">
+                    {/* The hash-chain rail: a continuous link from genesis down,
+                        snapping at the first entry that no longer recomputes. */}
+                    <span className="flex items-center gap-1.5">
+                      <span className="relative flex h-6 w-2 items-center justify-center">
+                        <span
+                          className={cn(
+                            "absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2",
+                            index === 0 && "top-1/2",
+                            index === shown.length - 1 && "bottom-1/2",
+                            atBreak || after
+                              ? "bg-rose-400 dark:bg-rose-700"
+                              : walked || verification.valid
+                                ? "bg-emerald-500"
+                                : "bg-slate-200 dark:bg-slate-700",
+                          )}
+                        />
+                        {atBreak ? (
+                          <Unlink className="relative size-2.5 text-rose-600 dark:text-rose-400" />
+                        ) : (
+                          <Link2
+                            className={cn(
+                              "relative size-2.5",
+                              after
+                                ? "text-rose-400"
+                                : walked || verification.valid
+                                  ? "text-emerald-600 dark:text-emerald-400"
+                                  : "text-slate-300 dark:text-slate-600",
+                            )}
+                          />
+                        )}
+                      </span>
+                      {entry.seq}
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+                    {toSeconds(entry.timestamp)}
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    <div className="whitespace-nowrap">{entry.operation}</div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                      {entry.actorType}:{entry.actorId}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <TierBadge tier={entry.tier} />
+                  </TableCell>
+                  <TableCell>
+                    <DecisionBadge decision={entry.decision} />
+                  </TableCell>
+                  <TableCell className="max-w-[28rem] text-slate-600 dark:text-slate-400">
+                    <span className={cn(expanded === entry.seq ? "" : "line-clamp-2")}>{entry.reason}</span>
+                    {expanded === entry.seq ? (
+                      <div className="mt-2 flex flex-col gap-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-500">
+                        <span>timestamp {entry.timestamp}</span>
+                        <span>payloadDigest {entry.payloadDigest}</span>
+                        <span className="flex items-center gap-1">
+                          prev {entry.prevLogHash} <Link2 className="size-3" />
+                        </span>
+                        <span className={cn(atBreak && "text-rose-600 dark:text-rose-400")}>
+                          curr {entry.currentLogHash}
+                          {atBreak ? " ← no longer recomputes from the contents above" : ""}
+                        </span>
+                      </div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="font-mono text-[10px] text-slate-400">
+                    {entry.prevLogHash === GENESIS ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">genesis</span>
+                    ) : (
+                      <>…{entry.prevLogHash.slice(-6)}</>
+                    )}
+                    <div>→ …{entry.currentLogHash.slice(-6)}</div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
             {shown.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="py-8 text-center text-slate-500 dark:text-slate-400">
@@ -198,14 +369,13 @@ export function AuditLedger({ data }: { data: DashboardState }) {
             ) : null}
           </TableBody>
         </Table>
-        {!verification.valid ? (
-          <div className="m-4 flex items-start gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-            <ShieldX className="mt-0.5 size-4 shrink-0" />
-            <span>
-              The chain does not verify: {verification.reason} at seq {verification.brokenAtSeq}. Every entry from
-              that point on is untrustworthy.
-            </span>
-          </div>
+
+        {tampered ? (
+          <p className="m-4 text-[11px] text-slate-500 dark:text-slate-400">
+            The edit above exists only in this browser tab — the file on disk is untouched. Verification is
+            recomputed locally with WebCrypto, so detection does not depend on trusting the service that wrote
+            the log.
+          </p>
         ) : null}
       </CardContent>
     </Card>

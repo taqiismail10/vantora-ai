@@ -17,6 +17,7 @@ import {
   attestationBundle,
   loadCopilotContext,
   runCopilotTool,
+  tier2Payload,
   type CopilotContext,
   type ToolRunResult,
 } from "@/lib/agent/vantora-copilot";
@@ -186,6 +187,8 @@ export async function POST(request: Request) {
     input?: Record<string, unknown>;
     userApprovalToken?: string;
     actorId?: string;
+    /** The figure the human typed in the approval dialog, when one asked. */
+    confirmedAmount?: number;
   };
 
   const seed = await seedApexDataset();
@@ -221,10 +224,16 @@ export async function POST(request: Request) {
           { status: 503 },
         );
       }
+      // The token commits to the exact payload the execute call will act on,
+      // so an approval for $2,345 from FIN-MERIDIAN cannot be spent on
+      // $90,000 from FIN-QUICKFLOAT.
+      const approvedPayload = tier2Payload(operation, body.input ?? {}, ctx);
       const userApprovalToken = issueApprovalToken({
         operation,
         planId: ctx.planId,
         actorId: body.actorId ?? HUMAN_ACTOR,
+        payload: approvedPayload,
+        confirmedAmount: body.confirmedAmount,
       });
       // The approval itself is an auditable human act.
       const audit = await enforcePermissionGate({
@@ -241,7 +250,11 @@ export async function POST(request: Request) {
         tier: classifyOperation(operation),
         plan_id: ctx.planId,
         userApprovalToken,
-        verification: verifyApprovalToken(userApprovalToken, { operation, planId: ctx.planId }),
+        verification: verifyApprovalToken(userApprovalToken, {
+          operation,
+          planId: ctx.planId,
+          payload: approvedPayload,
+        }),
         seq: audit.auditEntry.seq,
       });
     }

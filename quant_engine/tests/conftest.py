@@ -137,11 +137,12 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ApPayable(
                 id="AP-PAYROLL",
-                supplier_name="Payroll run (34 staff)",
+                supplier_name="Monthly factory payroll (100 staff)",
                 amount=78_000.0,
                 due_day=14,
                 late_fee_pct=0.02,
                 is_critical=True,
+                is_payroll=True,
                 default_penalty=18_000.0,
             ),
             ApPayable(

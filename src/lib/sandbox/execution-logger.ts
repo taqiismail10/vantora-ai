@@ -103,14 +103,24 @@ function chainHead(): { seq: number; hash: string } {
   return head;
 }
 
+/**
+ * Callers sometimes namespace the id themselves ("agent:vantora-copilot").
+ * Storing that beside actorType renders as "agent:agent:vantora-copilot", so
+ * the prefix is stripped once here rather than in every consumer.
+ */
+export function normaliseActorId(actorType: string, actorId: string): string {
+  return actorId.startsWith(`${actorType}:`) ? actorId.slice(actorType.length + 1) : actorId;
+}
+
 /** Append one tamper-evident entry to the JSONL chain (and Prisma, if present). */
 export async function logOperation(input: LogOperationInput): Promise<AuditLogEntry> {
   const previous = chainHead();
+  const actorType = input.actorType ?? "agent";
   const unhashed: Omit<AuditLogEntry, "currentLogHash"> = {
     seq: previous.seq + 1,
     timestamp: new Date().toISOString(),
-    actorType: input.actorType ?? "agent",
-    actorId: input.actorId,
+    actorType,
+    actorId: normaliseActorId(actorType, input.actorId),
     operation: input.operation,
     tier: input.tier,
     decision: input.decision,

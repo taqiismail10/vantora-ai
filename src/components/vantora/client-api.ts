@@ -20,8 +20,15 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return payload as T;
 }
 
-export async function fetchDashboardState(): Promise<DashboardState> {
-  const response = await fetch("/api/state", { cache: "no-store" });
+/** `profile` switches the sandbox SME; `rho` re-runs the forecast correlated. */
+export async function fetchDashboardState(
+  options: { profile?: string; rho?: number } = {},
+): Promise<DashboardState> {
+  const query = new URLSearchParams();
+  if (options.profile) query.set("profile", options.profile);
+  if (options.rho) query.set("rho", String(options.rho));
+  const suffix = query.size ? `?${query}` : "";
+  const response = await fetch(`/api/state${suffix}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`/api/state failed with ${response.status}`);
   return (await response.json()) as DashboardState;
 }
@@ -34,8 +41,15 @@ export const runTool = (tool: string, input: Record<string, unknown> = {}, userA
     userApprovalToken,
   });
 
-export const requestApproval = (operation: string) =>
-  post<ApprovalResult>("/api/action", { action: "approve", operation });
+/**
+ * The input must match the one the execute call sends: the minted token
+ * commits to a digest of the payload built from it.
+ */
+export const requestApproval = (
+  operation: string,
+  input: Record<string, unknown> = {},
+  confirmedAmount?: number,
+) => post<ApprovalResult>("/api/action", { action: "approve", operation, input, confirmedAmount });
 
 export const runRedTeamDrill = () => post<RedTeamResult>("/api/action", { action: "red_team" });
 

@@ -10,20 +10,23 @@
 import { NextResponse } from "next/server";
 
 import { askCopilot, loadCopilotContext } from "@/lib/agent/vantora-copilot";
-import { seedApexDataset } from "@/lib/sandbox/seed-data";
+import { parseSmeProfileId, seedApexDataset } from "@/lib/sandbox/seed-data";
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     question?: string;
     actorId?: string;
     userApprovalToken?: string;
+    /** Which sandbox SME to answer about. Unrecognised values fall back to Apex. */
+    profile?: string;
   };
 
   const question = (body.question ?? "").trim();
   if (!question) return NextResponse.json({ error: "question is required" }, { status: 400 });
 
-  const seed = await seedApexDataset();
-  const ctx = await loadCopilotContext(undefined, seed.smeProfileId);
+  const profile = parseSmeProfileId(body.profile ?? new URL(request.url).searchParams.get("profile"));
+  const seed = await seedApexDataset(profile);
+  const ctx = await loadCopilotContext(undefined, seed.smeProfileId, profile);
   const turn = await askCopilot({
     question,
     ctx,

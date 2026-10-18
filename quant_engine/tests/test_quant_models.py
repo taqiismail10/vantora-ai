@@ -81,6 +81,56 @@ def test_working_capital_metrics(apex):
     )
 
 
+def test_dpo_divides_payables_by_daily_cogs_not_daily_revenue(apex):
+    """(a) DPO against revenue overstates how fast the firm pays by the whole margin."""
+    assert apex.gross_margin == 0.35  # the default every existing caller inherits
+    wc = forecast(apex).working_capital_metrics
+    daily_cogs = apex.monthly_revenue * (1 - apex.gross_margin) / 30
+    assert wc.days_payable_outstanding == pytest.approx(wc.total_ap_due / daily_cogs, rel=1e-3)
+
+    # The old denominator is strictly larger, so it reported a strictly smaller DPO.
+    naive_dpo = wc.total_ap_due / (apex.monthly_revenue / 30)
+    assert wc.days_payable_outstanding > naive_dpo
+
+    # A thinner margin means more COGS per revenue dollar, so AP covers fewer days.
+    thin = forecast(apex.model_copy(update={"gross_margin": 0.10})).working_capital_metrics
+    assert thin.days_payable_outstanding < wc.days_payable_outstanding
+
+
+def test_decision_day_is_72h_before_the_crunch(apex):
+    result = forecast(apex)
+    assert result.decision_day == CRUNCH_DAY - 3 == 11
+    # Nothing to be early for when the P10 line never breaks.
+    assert forecast(apex.model_copy(update={"current_cash": 500_000.0})).decision_day is None
+
+
+def test_p10_ci_95_brackets_the_crunch_day_p10_estimate(apex):
+    result = forecast(apex)
+    low, high = result.p10_ci_95
+    assert low <= result.p10_trajectory[CRUNCH_DAY - 1] <= high
+    assert forecast(apex).p10_ci_95 == result.p10_ci_95  # order statistics, not a bootstrap
+
+
+def test_correlated_delays_widen_the_tail(apex):
+    """(b) One systemic factor makes the whole receivables book arrive late together."""
+    independent = forecast(apex)
+    correlated = forecast(apex.model_copy(update={"correlation_rho": 0.6}))
+
+    def mean_spread(result):
+        return float(np.mean(np.array(result.p90_trajectory) - np.array(result.p10_trajectory)))
+
+    assert mean_spread(correlated) > mean_spread(independent)
+    # Still a valid percentile ordering, and still reproducible.
+    assert np.all(np.array(correlated.p10_trajectory) <= np.array(correlated.p90_trajectory) + 1e-9)
+    assert forecast(apex.model_copy(update={"correlation_rho": 0.6})).p10_trajectory == correlated.p10_trajectory
+
+
+def test_rho_zero_leaves_the_canonical_trajectories_untouched(apex):
+    """The default must not move: every pinned Apex figure is tied to it."""
+    assert apex.correlation_rho == 0.0
+    assert forecast(apex).p10_trajectory == forecast(apex.model_copy(update={"correlation_rho": 0.0})).p10_trajectory
+
+
 # ------------------------------------------------------------------ financing ranker
 
 
@@ -171,6 +221,29 @@ def test_do_nothing_plan_charges_the_payroll_default_penalty(apex):
     assert [a.kind for a in plan.actions] == ["missed_payable"]
     assert plan.actions[0].target_id == "AP-PAYROLL"
     assert plan.total_cost == pytest.approx(0.02 * 58_000 + 18_000)
+
+
+def test_unpaid_payroll_is_a_statutory_breach_not_a_priced_trade_off(apex):
+    plan = optimize(apex).baseline_do_nothing_plan
+    assert plan.breaches_statutory_payroll is True
+    assert plan.feasible is False  # not an option the owner may buy at any price
+    assert "STATUTORY BREACH" in plan.actions[0].detail
+    assert "statutory breach" in plan.notes
+
+
+def test_infeasible_when_no_lever_set_reaches_the_buffer(apex):
+    """A gap bigger than every lever combined is a workout, not a cheaper plan."""
+    apex.current_cash = 1_000.0
+    for option in apex.financing_options:
+        option.max_amount = 5_000.0
+    r = optimize(apex)
+    assert r.solver_status == "INFEASIBLE"
+    assert r.optimal_plan.feasible is False
+    assert r.optimal_plan.actions == []
+    assert r.optimal_plan.meets_buffer is False
+    # No savings are claimed against counterfactuals the plan cannot beat.
+    assert r.savings_vs_naive == 0.0
+    assert "bank workout" in r.mathematical_proof_summary
 
 
 def test_optimal_plan_never_draws_on_an_ineligible_facility(apex):

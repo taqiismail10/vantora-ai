@@ -14,7 +14,10 @@ function Tabs({
       data-slot="tabs"
       data-orientation={orientation}
       className={cn(
-        "group/tabs flex gap-2 data-horizontal:flex-col",
+        // `data-horizontal:` compiles to the attribute selector [data-horizontal],
+        // which this element never has — it carries data-orientation. The variant
+        // silently never matched, leaving the list and the panel side by side.
+        "group/tabs flex gap-2 data-[orientation=horizontal]:flex-col",
         className
       )}
       {...props}

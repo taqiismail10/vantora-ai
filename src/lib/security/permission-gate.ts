@@ -11,9 +11,15 @@
  * traced back to the Python quant engine is denied outright.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
-import { logOperation, type AuditLogEntry, type GateDecisionName, type PermissionTierName } from "../sandbox/execution-logger";
+import {
+  digestPayload,
+  logOperation,
+  type AuditLogEntry,
+  type GateDecisionName,
+  type PermissionTierName,
+} from "../sandbox/execution-logger";
 
 export const PERMISSION_TIERS = {
   TIER_0_AUTO_READ: "TIER_0_AUTO_READ",
@@ -54,6 +60,18 @@ export function classifyOperation(operation: string): PermissionTier {
   return OPERATION_TIERS[operation] ?? PERMISSION_TIERS.TIER_2_HITL_APPROVAL;
 }
 
+/** Severity order. A caller may raise its own tier, never lower the registry's. */
+const TIER_SEVERITY: Record<PermissionTier, number> = {
+  TIER_0_AUTO_READ: 0,
+  TIER_1_DRAFT_ONLY: 1,
+  TIER_2_HITL_APPROVAL: 2,
+  TIER_3_PROHIBITED: 3,
+};
+
+export function maxTier(a: PermissionTier, b: PermissionTier): PermissionTier {
+  return TIER_SEVERITY[a] >= TIER_SEVERITY[b] ? a : b;
+}
+
 // ------------------------------------------------------- HMAC approval tokens (T2)
 
 const TOKEN_VERSION = "v1";
@@ -63,9 +81,28 @@ export interface ApprovalClaims {
   operation: string;
   planId: string;
   actorId: string;
+  /**
+   * SHA-256 of the exact payload the human approved. Without this a token
+   * minted to draw $2,345 from FIN-MERIDIAN also authorises $90,000 from
+   * FIN-QUICKFLOAT, because operation and planId are identical in both.
+   */
+  payloadDigest: string;
+  /** Single-use nonce, burned on the first ALLOWED use. */
+  jti: string;
+  /** The figure the human typed to confirm, when the UI asked for one. */
+  confirmedAmount?: number;
   /** Epoch milliseconds. */
   exp: number;
 }
+
+/**
+ * Nonces already spent on an allowed Tier 2 operation.
+ *
+ * ponytail: process-local, so a single approval server is assumed, and it
+ * grows by one entry per executed approval. Upgrade path if either matters:
+ * a Redis/DB set keyed by jti with a TTL matching the token's.
+ */
+const CONSUMED_JTI = new Set<string>();
 
 function signingSecret(): string | null {
   const secret = process.env.HITL_SIGNING_SECRET;
@@ -74,10 +111,19 @@ function signingSecret(): string | null {
 
 const b64url = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
+export interface IssueApprovalInput {
+  operation: string;
+  planId: string;
+  actorId: string;
+  /** The exact object the Tier 2 call will act on. The token commits to it. */
+  payload?: unknown;
+  /** The amount the human typed to confirm, cross-checked at verify time. */
+  confirmedAmount?: number;
+  ttlMs?: number;
+}
+
 /** Mint an approval token. In production only the HITL approval route calls this. */
-export function issueApprovalToken(
-  claims: Omit<ApprovalClaims, "exp"> & { ttlMs?: number },
-): string {
+export function issueApprovalToken(claims: IssueApprovalInput): string {
   const secret = signingSecret();
   if (!secret) throw new Error("HITL_SIGNING_SECRET is not configured");
 
@@ -85,6 +131,9 @@ export function issueApprovalToken(
     operation: claims.operation,
     planId: claims.planId,
     actorId: claims.actorId,
+    payloadDigest: digestPayload(claims.payload),
+    jti: randomUUID(),
+    ...(claims.confirmedAmount !== undefined ? { confirmedAmount: claims.confirmedAmount } : {}),
     exp: Date.now() + (claims.ttlMs ?? DEFAULT_TTL_MS),
   };
   const encoded = b64url(JSON.stringify(body));
@@ -100,7 +149,7 @@ export interface TokenVerification {
 
 export function verifyApprovalToken(
   token: string | undefined,
-  expected: { operation: string; planId?: string },
+  expected: { operation: string; planId?: string; payload?: unknown },
 ): TokenVerification {
   if (!token) return { valid: false, reason: "no userApprovalToken supplied", claims: null };
 
@@ -141,7 +190,36 @@ export function verifyApprovalToken(
   if (expected.planId && claims.planId !== expected.planId) {
     return { valid: false, reason: "approval token is bound to a different recovery plan", claims };
   }
+  // The binding that makes the approval mean something: same operation, same
+  // plan and same *payload*. A digest mismatch is a swapped counterparty, a
+  // swapped facility or a swapped amount.
+  if (claims.payloadDigest !== digestPayload(expected.payload)) {
+    return {
+      valid: false,
+      reason:
+        "approval token payloadDigest mismatch: token was minted for a different action payload/amount",
+      claims,
+    };
+  }
+  if (
+    claims.confirmedAmount !== undefined &&
+    claims.confirmedAmount !== payloadAmount(expected.payload)
+  ) {
+    return {
+      valid: false,
+      reason: `approval token was confirmed for ${claims.confirmedAmount}, not the amount in this call`,
+      claims,
+    };
+  }
   return { valid: true, reason: null, claims };
+}
+
+function payloadAmount(payload: unknown): number | undefined {
+  if (payload && typeof payload === "object" && "amount" in payload) {
+    const amount = Number((payload as { amount: unknown }).amount);
+    return Number.isFinite(amount) ? amount : undefined;
+  }
+  return undefined;
 }
 
 // ------------------------------------------------------------ numerical integrity
@@ -284,12 +362,25 @@ const INJECTION_PATTERNS: { name: string; pattern: RegExp }[] = [
   // The qualifier is required: "remit to the usual account on file" is ordinary
   // supplier boilerplate, "wire to external account" is not.
   { name: "wire_to_external_account", pattern: /\b(?:wire|transfer|remit|send)\b[^.?!]{0,60}\b(?:external|new|different|offshore|alternate|updated)\s+account\b/i },
-  { name: "account_number_injection", pattern: /\baccount\s*#?\s*\d{5,}/i },
+  // A bare account number is ordinary remittance advice ("quote account
+  // #10044821 on remittance"). What makes it an injection is a payment verb
+  // steering money *at* it.
+  {
+    name: "account_number_injection",
+    pattern:
+      /\b(?:wire|transfer|send|deposit|route|redirect|reroute)\b[^.?!]{0,60}\baccount\s*(?:number|no\.?)?\s*#?\s*\d{5,}/i,
+  },
   { name: "bypass_approval", pattern: /\b(?:no|without|skip|bypass|waive)\b[^.?!]{0,30}\b(?:human\s+)?(?:approval|authorisation|authorization|review|confirmation)\b/i },
   { name: "forged_authority", pattern: /\b(?:cfo|ceo|owner|director|admin(?:istrator)?)\b[^.?!]{0,40}\b(?:pre-?approved|authorised|authorized|instructed|approved)\b/i },
   { name: "role_reassignment", pattern: /\byou\s+are\s+(?:now|a)\b|\bact\s+as\b|\bdeveloper\s+mode\b|\bjailbreak\b/i },
   { name: "tool_invocation_attempt", pattern: /<\/?(?:system|tool|function)[\s>]|\{\{\s*\w+\s*\}\}/i },
-  { name: "credential_request", pattern: /\b(?:api[\s_-]?key|password|secret|private\s+key|credential)s?\b/i },
+  // "a trade secret", "secret sauce" and "handle per the NDA" are ordinary
+  // manufacturing English. An injection *asks for* the credential.
+  {
+    name: "credential_request",
+    pattern:
+      /\b(?:send|share|provide|reveal|give|disclose|paste|forward|return|email|what\s+(?:is|are))\b[^.?!]{0,40}\b(?:api[\s_-]?key|password|passphrase|secret\s+key|private\s+key|access\s+token|credential)s?\b/i,
+  },
   { name: "urgency_coercion", pattern: /\b(?:immediately|urgent(?:ly)?|before\s+processing)\b[^.?!]{0,40}\b(?:wire|transfer|pay|release)\b/i },
   { name: "disable_controls", pattern: /\b(?:disable|turn\s+off|suppress)\b[^.?!]{0,30}\b(?:logging|audit|security|guardrail)/i },
 ];
@@ -297,6 +388,8 @@ const INJECTION_PATTERNS: { name: string; pattern: RegExp }[] = [
 export interface InjectionMatch {
   name: string;
   excerpt: string;
+  /** The exact substring that matched, so a reviewer can be shown what fired. */
+  matched: string;
 }
 
 export interface InjectionScanResult {
@@ -321,6 +414,7 @@ export function detectIndirectPromptInjection(untrustedMemo: string | null | und
       matches.push({
         name,
         excerpt: memo.slice(Math.max(0, hit.index - 20), hit.index + hit[0].length + 20).trim(),
+        matched: hit[0],
       });
     }
   }
@@ -338,7 +432,7 @@ export function detectIndirectPromptInjection(untrustedMemo: string | null | und
 export interface GateRequest {
   operation: string;
   actorId: string;
-  /** Overrides the registry; the gate still never upgrades a Tier 3 operation. */
+  /** May only raise the registry tier, never lower it. See `maxTier`. */
   tier?: PermissionTier;
   /** The LLM response or tool-call arguments under review. */
   payload?: unknown;
@@ -369,9 +463,13 @@ export interface GateResult {
  * the result is always written to the hash-chained audit log, allow or deny.
  */
 export async function enforcePermissionGate(request: GateRequest): Promise<GateResult> {
-  const requestedTier = request.tier ?? classifyOperation(request.operation);
+  // The registry is the floor. A caller may only ever raise the tier, so
+  // `{ operation: "wire_funds_to_external_account", tier: "TIER_0_AUTO_READ" }`
+  // still resolves to TIER_3_PROHIBITED.
+  const registryTier = classifyOperation(request.operation);
+  const effectiveTier = request.tier ? maxTier(registryTier, request.tier) : registryTier;
 
-  let tier: PermissionTier = requestedTier;
+  let tier: PermissionTier = effectiveTier;
   let decision: GateDecisionName = "DENIED";
   let reason = "denied by default";
 
@@ -389,22 +487,32 @@ export async function enforcePermissionGate(request: GateRequest): Promise<GateR
     // Untrusted text tried to issue instructions: the operation is poisoned.
     tier = PERMISSION_TIERS.TIER_3_PROHIBITED;
     reason = `indirect prompt injection detected (${injection.matches.map((m) => m.name).join(", ")})`;
-  } else if (requestedTier === PERMISSION_TIERS.TIER_3_PROHIBITED) {
+  } else if (effectiveTier === PERMISSION_TIERS.TIER_3_PROHIBITED) {
     reason = `operation "${request.operation}" is TIER_3_PROHIBITED and can never be executed`;
   } else if (numericalIntegrity && !numericalIntegrity.ok) {
     reason = `numerical integrity failure: ${numericalIntegrity.violations.map((v) => v.message).join("; ")}`;
-  } else if (requestedTier === PERMISSION_TIERS.TIER_2_HITL_APPROVAL) {
+  } else if (effectiveTier === PERMISSION_TIERS.TIER_2_HITL_APPROVAL) {
     tokenVerification = verifyApprovalToken(request.userApprovalToken, {
       operation: request.operation,
       planId: request.planId,
+      payload: request.payload,
     });
+    if (tokenVerification.valid && CONSUMED_JTI.has(tokenVerification.claims!.jti)) {
+      // One approval, one execution. A re-presented token is a replay.
+      tokenVerification = {
+        valid: false,
+        reason: "approval token has already been consumed (replay)",
+        claims: tokenVerification.claims,
+      };
+    }
     if (tokenVerification.valid) {
+      CONSUMED_JTI.add(tokenVerification.claims!.jti);
       decision = "ALLOWED";
       reason = `human approval verified for ${request.operation}`;
     } else {
       reason = `TIER_2_HITL_APPROVAL blocked: ${tokenVerification.reason}`;
     }
-  } else if (requestedTier === PERMISSION_TIERS.TIER_1_DRAFT_ONLY) {
+  } else if (effectiveTier === PERMISSION_TIERS.TIER_1_DRAFT_ONLY) {
     decision = "DRAFTED";
     reason = `draft produced for human review; no side effects executed`;
   } else {

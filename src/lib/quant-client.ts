@@ -42,6 +42,8 @@ export interface ApPayableInput {
   late_fee_pct?: number;
   is_critical?: boolean;
   default_penalty?: number;
+  /** Wages: missing it is a statutory breach. Declared, never inferred from the name. */
+  is_payroll?: boolean;
 }
 
 export interface FinancingOptionInput {
@@ -69,6 +71,10 @@ export interface SmeFinancialState {
   horizon_days?: number;
   max_relationship_risk?: number;
   relationship_risk_price?: number;
+  /** DPO divides AP by daily COGS, not daily revenue, so the margin is required. */
+  gross_margin?: number;
+  /** Systemic correlation between customer payment delays, 0 to 0.95. */
+  correlation_rho?: number;
 }
 
 export interface WorkingCapitalMetrics {
@@ -91,6 +97,10 @@ export interface ForecastResult {
   p90_trajectory: number[];
   shortfall_detected: boolean;
   first_shortfall_day: number | null;
+  /** 72h before the crunch: the last day the full lever set is still open. */
+  decision_day: number | null;
+  /** Distribution-free 95% CI on the crunch-day P10 estimate. */
+  p10_ci_95: [number, number];
   p10_shortfall_amount: number;
   p50_shortfall_amount: number;
   shortfall_probability: number;
@@ -118,6 +128,10 @@ export interface RecoveryPlanResult {
   total_cost: number;
   post_recovery_p10_balance: number;
   meets_buffer: boolean;
+  /** False when no admissible combination of levers closes the gap. */
+  feasible: boolean;
+  /** A payroll run goes unpaid on its due date: a statutory breach, not a trade-off. */
+  breaches_statutory_payroll: boolean;
   notes: string;
 }
 
@@ -214,6 +228,86 @@ export function postRecoveryP10Trajectory(
   );
 }
 
+// ------------------------------------------------------- cost of procrastination
+
+export interface ProcrastinationPoint {
+  /** Days the owner let pass before acting. */
+  day_waited: number;
+  days_remaining: number;
+  label: string;
+  /** Null when no lever set left can close the gap. */
+  total_cost: number | null;
+  feasible: boolean;
+  /** What closed between the previous decision point and this one. */
+  expired_lever: string;
+}
+
+/** Today, the last quiet week, the deferral deadline, the payroll lock, the eve. */
+const DECISION_HORIZONS = [0, 4, 7, 11, 13];
+/** A supplier only agrees to a deferral if asked this far before the bill falls due. */
+const AP_DEFERRAL_NOTICE_DAYS = 6;
+/** An early-pay offer still has to be read, approved and queued before it settles. */
+const AR_OFFER_LEAD_DAYS = 2;
+
+/** The levers still open to an owner who has already waited `dayWaited` days. */
+function openLevers(state: SmeFinancialState, crunchDay: number, dayWaited: number) {
+  const daysRemaining = crunchDay - dayWaited;
+  const invoices = state.invoices_ar.map((inv) => ({
+    ...inv,
+    early_payment_discount_eligible:
+      (inv.early_payment_discount_eligible ?? false) &&
+      (inv.early_payment_settles_in_days ?? 3) + AR_OFFER_LEAD_DAYS <= daysRemaining,
+  }));
+  const payables = state.payables_ap.map((ap) => ({
+    ...ap,
+    is_flexible: (ap.is_flexible ?? false) && ap.due_day - dayWaited >= AP_DEFERRAL_NOTICE_DAYS,
+  }));
+  const financing = state.financing_options.filter((f) => f.funding_days < daysRemaining);
+
+  const names = [
+    ...invoices.filter((i) => i.early_payment_discount_eligible).map((i) => `${i.customer_name} early-pay discount`),
+    ...payables.filter((p) => p.is_flexible).map((p) => `${p.supplier_name} deferral`),
+    ...financing.map((f) => `${f.provider} (${f.funding_days}d funding)`),
+  ];
+  return { narrowed: { ...state, invoices_ar: invoices, payables_ap: payables, financing_options: financing }, names };
+}
+
+/**
+ * What waiting costs, priced rather than asserted.
+ *
+ * Each point re-runs the optimiser against the same forecast with only the
+ * levers an owner who waited that long still has: an early-pay offer needs
+ * lead time to be accepted, a supplier needs notice before the bill falls due,
+ * and a facility is useless once it cannot fund before the crunch. The gap
+ * itself never moves — only the means of closing it.
+ */
+export function procrastinationCurve(
+  state: SmeFinancialState,
+  forecast: ForecastResult,
+  optimization: OptimizationResult,
+): ProcrastinationPoint[] {
+  const crunchDay = optimization.crunch_day;
+  if (!crunchDay) return []; // nothing to be late for
+
+  let previous: string[] | null = null;
+  return DECISION_HORIZONS.filter((d) => d < crunchDay).map((dayWaited) => {
+    const daysRemaining = crunchDay - dayWaited;
+    const { narrowed, names } = openLevers(state, crunchDay, dayWaited);
+    const result = localOptimize(narrowed, forecast);
+    const lost = previous ? previous.filter((n) => !names.includes(n)) : [];
+    previous = names;
+
+    return {
+      day_waited: dayWaited,
+      days_remaining: daysRemaining,
+      label: dayWaited === 0 ? `Day 0 (today, ${daysRemaining}d out)` : `Day ${dayWaited} (${daysRemaining}d out)`,
+      total_cost: result.optimal_plan.feasible ? result.optimal_plan.total_cost : null,
+      feasible: result.optimal_plan.feasible,
+      expired_lever: lost.length ? lost.join("; ") : "none — every lever still open",
+    };
+  });
+}
+
 // -------------------------------------------------- deterministic fallback mirror
 
 /** mulberry32: tiny, seedable, and identical across Node and the browser. */
@@ -244,9 +338,38 @@ function percentile(sorted: number[], q: number): number {
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
+/**
+ * Distribution-free 95% CI on a sample quantile, from the order statistics.
+ *
+ * The rank of the q-quantile is Binomial(n, q); its normal approximation gives
+ * the two order statistics that bracket it. No bootstrap, so the interval is
+ * exactly reproducible and costs one sort — and it is the same arithmetic as
+ * `quantile_ci_95` in `forecaster.py`.
+ */
+export function quantileCi95(column: number[], q = 0.1): [number, number] {
+  const n = column.length;
+  const sorted = [...column].sort((a, b) => a - b);
+  const halfWidth = 1.96 * Math.sqrt(n * q * (1 - q));
+  const clamp = (i: number) => Math.min(Math.max(i, 0), n - 1);
+  return [
+    round2(sorted[clamp(Math.floor(n * q - halfWidth))]),
+    round2(sorted[clamp(Math.ceil(n * q + halfWidth))]),
+  ];
+}
+
+/** 72h before the crunch: the payroll file locks, so the lever set starts closing. */
+const DECISION_LEAD_DAYS = 3;
+
 export function localForecast(state: SmeFinancialState): ForecastResult {
   const horizon = state.horizon_days ?? 30;
   const next = rng(SEED);
+
+  // One systemic factor per trajectory: a bad month pushes the whole book late
+  // together. Drawn from its own stream so the independent path (rho = 0)
+  // consumes exactly the draws it always did and stays byte-identical.
+  const rho = state.correlation_rho ?? 0;
+  const systemic = rng(SEED + 1);
+  const zSys = rho > 0 ? Array.from({ length: N_SIMULATIONS }, () => gaussian(systemic)) : null;
 
   // ponytail: delays are clamped at 0 rather than re-sampled like scipy's
   // truncnorm, so the fallback is close to, not bit-identical with, Python.
@@ -257,7 +380,10 @@ export function localForecast(state: SmeFinancialState): ForecastResult {
     const scale = inv.expected_delay_days_std * stretch;
     const days: number[] = [];
     for (let s = 0; s < N_SIMULATIONS; s++) {
-      let delay = Math.max(0, loc + scale * gaussian(next));
+      const z = zSys
+        ? Math.sqrt(rho) * zSys[s] + Math.sqrt(1 - rho) * gaussian(next)
+        : gaussian(next);
+      let delay = Math.max(0, loc + scale * z);
       if (next() < 1 - inv.reliability_score) {
         delay += Math.exp(Math.log(7) + 0.5 * gaussian(next));
       }
@@ -302,8 +428,11 @@ export function localForecast(state: SmeFinancialState): ForecastResult {
   const totalAr = state.invoices_ar.reduce((sum, i) => sum + i.amount, 0);
   const totalAp = state.payables_ap.reduce((sum, p) => sum + p.amount, 0);
   const dailyRevenue = state.monthly_revenue / 30;
+  // DSO is receivables over daily sales; DPO is payables over daily *COGS*.
+  // Dividing AP by revenue understates DPO by the whole gross margin.
+  const dailyCogs = (state.monthly_revenue * (1 - (state.gross_margin ?? 0.35))) / 30;
   const dso = totalAr / dailyRevenue;
-  const dpo = totalAp / dailyRevenue;
+  const dpo = totalAp / dailyCogs;
   const negative = p50.findIndex((v) => v < 0);
 
   const invoiceP90: Record<string, number> = {};
@@ -319,6 +448,8 @@ export function localForecast(state: SmeFinancialState): ForecastResult {
     p90_trajectory: p90,
     shortfall_detected: breachIndex !== -1,
     first_shortfall_day: breachIndex === -1 ? null : breachIndex + 1,
+    decision_day: breachIndex === -1 ? null : Math.max(1, breachIndex + 1 - DECISION_LEAD_DAYS),
+    p10_ci_95: quantileCi95(balances.map((row) => row[breachIndex === -1 ? horizon - 1 : breachIndex])),
     p10_shortfall_amount: round2(Math.max(0, buffer - Math.min(...p10))),
     p50_shortfall_amount: round2(Math.max(0, buffer - Math.min(...p50))),
     shortfall_probability: Math.round((breached / N_SIMULATIONS) * 10000) / 10000,
@@ -399,6 +530,11 @@ interface Lever {
   risk: number;
 }
 
+export const ESCALATION_NOTE =
+  "No combination of AR discounts, AP deferrals and eligible facilities closes the gap. " +
+  "Escalate to a bank workout or an equity injection; drawing more debt into an unclosed " +
+  "gap buys days and adds a creditor.";
+
 export function localOptimize(
   state: SmeFinancialState,
   forecast: ForecastResult = localForecast(state),
@@ -415,6 +551,8 @@ export function localOptimize(
       total_cost: 0,
       post_recovery_p10_balance: p10,
       meets_buffer: true,
+      feasible: true,
+      breaches_statutory_payroll: false,
       notes,
     });
     return {
@@ -479,11 +617,11 @@ export function localOptimize(
     });
   }
 
-  const cheapestFinancing = matched
+  const facilities = matched
     .filter((m) => m.eligible && m.max_available > 0)
     .map((m) => ({ matched: m, option: state.financing_options.find((o) => o.id === m.id)! }))
-    .sort((a, b) => costPerDollar(a.option) - costPerDollar(b.option))[0];
-  const financingRate = cheapestFinancing ? costPerDollar(cheapestFinancing.option) : Infinity;
+    .sort((a, b) => costPerDollar(a.option) - costPerDollar(b.option));
+  const financingRate = facilities.length ? costPerDollar(facilities[0].option) : Infinity;
 
   // ponytail: greedy cost-per-dollar surrogate for the Python MILP. A binary
   // lever is only taken when it beats financing the slice of the gap it covers,
@@ -495,50 +633,74 @@ export function localOptimize(
   let cashRaised = 0;
   let totalCost = 0;
 
-  for (const lever of levers.sort((a, b) => a.cost / a.gain - b.cost / b.gain)) {
-    if (gap <= 0) break;
-    if (riskSpent + lever.risk > riskBudget + 1e-9) continue;
-    const slice = Math.min(gap, lever.gain);
-    if (lever.cost >= slice * financingRate) continue; // cheaper to borrow this slice
+  const takeLever = (lever: Lever) => {
     actions.push(lever.action);
     riskSpent += lever.risk;
     cashRaised += lever.gain;
     totalCost += lever.cost;
     gap -= lever.gain;
+  };
+
+  const byUnitCost = levers.sort((a, b) => a.cost / a.gain - b.cost / b.gain);
+  const skipped: Lever[] = [];
+  for (const lever of byUnitCost) {
+    if (gap <= 0) break;
+    if (riskSpent + lever.risk > riskBudget + 1e-9) continue;
+    const slice = Math.min(gap, lever.gain);
+    if (lever.cost >= slice * financingRate) {
+      skipped.push(lever); // cheaper to borrow this slice -- unless borrowing runs out
+      continue;
+    }
+    takeLever(lever);
   }
 
-  if (gap > 1e-6 && cheapestFinancing) {
-    const draw = Math.min(gap, cheapestFinancing.matched.max_available);
-    const cost = effectiveCost(cheapestFinancing.option, draw);
+  for (const { matched: m, option } of facilities) {
+    if (gap <= 1e-6) break;
+    const draw = Math.min(gap, m.max_available);
+    const cost = effectiveCost(option, draw);
     actions.push({
       kind: "bridge_draw",
-      target_id: cheapestFinancing.option.id,
-      label: `Draw $${Math.round(draw).toLocaleString()} from ${cheapestFinancing.option.provider}`,
+      target_id: option.id,
+      label: `Draw $${Math.round(draw).toLocaleString()} from ${option.provider}`,
       cash_impact: round2(draw),
       cost: round2(cost),
-      detail: `${((cheapestFinancing.option.origination_fee_pct ?? 0) * 100).toFixed(1)}% fee + ${(
-        cheapestFinancing.option.apr * 100
-      ).toFixed(1)}% APR for ${BRIDGE_TERM_DAYS}d`,
+      detail: `${((option.origination_fee_pct ?? 0) * 100).toFixed(1)}% fee + ${(option.apr * 100).toFixed(
+        1,
+      )}% APR for ${BRIDGE_TERM_DAYS}d`,
     });
     cashRaised += draw;
     totalCost += cost;
     gap -= draw;
   }
 
+  // Every facility is drawn to the ceiling and the gap is still open, so the
+  // levers that lost to borrowing on price are now the only cash left.
+  for (const lever of skipped) {
+    if (gap <= 1e-6) break;
+    if (riskSpent + lever.risk > riskBudget + 1e-9) continue;
+    takeLever(lever);
+  }
+
+  const feasible = gap <= 1e-6;
   const optimal: RecoveryPlanResult = {
     name: "Vantora optimal plan",
-    actions,
-    cash_raised: round2(cashRaised),
-    total_cost: round2(totalCost),
-    post_recovery_p10_balance: round2(p10AtCrunch + cashRaised),
-    meets_buffer: p10AtCrunch + cashRaised >= buffer - 1e-6,
-    notes: `Greedy cost-per-dollar mix closing a $${Math.round(required).toLocaleString()} gap on day ${crunchDay}.`,
+    actions: feasible ? actions : [],
+    cash_raised: feasible ? round2(cashRaised) : 0,
+    total_cost: feasible ? round2(totalCost) : 0,
+    post_recovery_p10_balance: round2(p10AtCrunch + (feasible ? cashRaised : 0)),
+    meets_buffer: feasible,
+    feasible,
+    breaches_statutory_payroll: false,
+    notes: feasible
+      ? `Greedy cost-per-dollar mix closing a $${Math.round(required).toLocaleString()} gap on day ${crunchDay}.`
+      : ESCALATION_NOTE,
   };
 
   // Do nothing: the money runs out on what is due from the crunch day onward.
   let unfunded = required;
   const missed: PlanAction[] = [];
   let doNothingCost = 0;
+  let breachesPayroll = false;
   for (const ap of state.payables_ap
     .filter((p) => p.due_day >= crunchDay)
     .sort((a, b) => a.due_day - b.due_day)) {
@@ -547,13 +709,16 @@ export function localOptimize(
     unfunded -= unpaid;
     const penalty = (ap.late_fee_pct ?? 0) * unpaid + (ap.is_critical ? ap.default_penalty ?? 0 : 0);
     doNothingCost += penalty;
+    if (ap.is_payroll) breachesPayroll = true;
     missed.push({
       kind: "missed_payable",
       target_id: ap.id,
       label: `Miss ${ap.supplier_name} ($${Math.round(unpaid).toLocaleString()} unpaid)`,
       cash_impact: 0,
       cost: round2(penalty),
-      detail: `${((ap.late_fee_pct ?? 0) * 100).toFixed(1)}% late fee${
+      detail: `${ap.is_payroll ? "STATUTORY BREACH: wages unpaid on the due date. " : ""}${(
+        (ap.late_fee_pct ?? 0) * 100
+      ).toFixed(1)}% late fee${
         ap.is_critical ? ` + $${(ap.default_penalty ?? 0).toLocaleString()} default penalty` : ""
       }`,
     });
@@ -566,7 +731,15 @@ export function localOptimize(
     total_cost: round2(doNothingCost),
     post_recovery_p10_balance: round2(p10AtCrunch),
     meets_buffer: false,
-    notes: `$${Math.round(required).toLocaleString()} of obligations go unfunded on day ${crunchDay}.`,
+    // Wages are not a line item to trade off against a late fee, so a baseline
+    // that leaves payroll unpaid is not an option at any price.
+    feasible: !breachesPayroll,
+    breaches_statutory_payroll: breachesPayroll,
+    notes:
+      `$${Math.round(required).toLocaleString()} of obligations go unfunded on day ${crunchDay}.` +
+      (breachesPayroll
+        ? " Payroll goes unpaid, which is a statutory breach — not a priced trade-off."
+        : ""),
   };
 
   const usable = matched.filter((m) => m.eligible && m.max_available > 0);
@@ -594,12 +767,15 @@ export function localOptimize(
       total_cost: round2(cost),
       post_recovery_p10_balance: round2(p10AtCrunch + draw),
       meets_buffer: p10AtCrunch + draw >= buffer - 1e-6,
+      feasible: p10AtCrunch + draw >= buffer - 1e-6,
+      breaches_statutory_payroll: false,
       notes: "Covers the gap but ignores free working-capital levers.",
     };
   } else {
     naive = { ...doNothing, name: "Naive: borrow everything" };
   }
 
+  const headroom = usable.reduce((sum, m) => sum + m.max_available, 0);
   return {
     company_name: forecast.company_name,
     crunch_day: crunchDay,
@@ -608,15 +784,23 @@ export function localOptimize(
     baseline_do_nothing_plan: doNothing,
     naive_borrowing_plan: naive,
     matched_financing_options: matched,
-    solver_status: "Optimal",
-    mathematical_proof_summary: [
-      `Crunch day ${crunchDay}: P10 cash $${Math.round(p10AtCrunch).toLocaleString()} vs safe buffer $${buffer.toLocaleString()} -> gap $${Math.round(required).toLocaleString()}.`,
-      `Fallback mirror status: Optimal (greedy cost-per-dollar over ${levers.length} working-capital levers + ${usable.length} eligible facilities).`,
-      `Optimal plan raises $${Math.round(cashRaised).toLocaleString()} for $${round2(totalCost).toLocaleString()} -> post-recovery P10 $${Math.round(p10AtCrunch + cashRaised).toLocaleString()}.`,
-      `Naive borrowing costs $${naive.total_cost.toLocaleString()}; doing nothing costs $${doNothing.total_cost.toLocaleString()}.`,
-    ].join("\n"),
-    savings_vs_naive: round2(naive.total_cost - totalCost),
-    savings_vs_do_nothing: round2(doNothing.total_cost - totalCost),
+    solver_status: feasible ? "Optimal" : "INFEASIBLE",
+    mathematical_proof_summary: (feasible
+      ? [
+          `Crunch day ${crunchDay}: P10 cash $${Math.round(p10AtCrunch).toLocaleString()} vs safe buffer $${buffer.toLocaleString()} -> gap $${Math.round(required).toLocaleString()}.`,
+          `Fallback mirror status: Optimal (greedy cost-per-dollar over ${levers.length} working-capital levers + ${usable.length} eligible facilities).`,
+          `Optimal plan raises $${Math.round(cashRaised).toLocaleString()} for $${round2(totalCost).toLocaleString()} -> post-recovery P10 $${Math.round(p10AtCrunch + cashRaised).toLocaleString()}.`,
+          `Naive borrowing costs $${naive.total_cost.toLocaleString()}; doing nothing costs $${doNothing.total_cost.toLocaleString()}.`,
+        ]
+      : [
+          `Crunch day ${crunchDay}: P10 cash $${Math.round(p10AtCrunch).toLocaleString()} vs safe buffer $${buffer.toLocaleString()} -> gap $${Math.round(required).toLocaleString()}.`,
+          `Fallback mirror status: INFEASIBLE over ${levers.length} working-capital levers + ${usable.length} eligible facilities.`,
+          `Total eligible facility headroom is $${Math.round(headroom).toLocaleString()} against a $${Math.round(required).toLocaleString()} gap.`,
+          ESCALATION_NOTE,
+        ]
+    ).join("\n"),
+    savings_vs_naive: feasible ? round2(naive.total_cost - totalCost) : 0,
+    savings_vs_do_nothing: feasible ? round2(doNothing.total_cost - totalCost) : 0,
     engine_source: "typescript-fallback",
   };
 }

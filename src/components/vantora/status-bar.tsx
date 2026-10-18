@@ -1,13 +1,73 @@
 "use client";
 
-/** The top status bar: what is serving the numbers, and is the ledger intact. */
+/** The top status bar: which SME is loaded, what is serving the numbers, and is the ledger intact. */
 
-import { Activity, Cpu, Download, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Activity, Cpu, Download, Loader2, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { DashboardState } from "@/lib/dashboard-state";
 import { cn } from "@/lib/utils";
+
+type ProfileId = DashboardState["profile"]["id"];
+
+const BAND_STYLE: Record<string, { dot: string; active: string }> = {
+  RED: {
+    dot: "bg-rose-500",
+    active: "border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200",
+  },
+  GREEN: {
+    dot: "bg-emerald-500",
+    active:
+      "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200",
+  },
+  BLACK: {
+    dot: "bg-slate-900 dark:bg-slate-200",
+    active: "border-slate-400 bg-slate-100 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100",
+  },
+};
+
+/** Short names: the switcher has to read at a glance on a 14" screen. */
+const SHORT_NAME: Record<string, string> = {
+  SME_APEX: "Apex Manufacturing",
+  SME_PRECISION: "Precision Carton",
+  SME_MIDLAND: "Midland Die-Cast",
+};
+
+const BAND_CAPTION: Record<string, string> = {
+  RED: "RED — Day-14 crunch",
+  GREEN: "GREEN — Healthy",
+  BLACK: "BLACK — Infeasible",
+};
+
+/**
+ * A broken chain is not one state.
+ *
+ * A truncated log (entries removed from the end) and a tampered one (a hash
+ * that no longer recomputes) need different responses, so they must not share
+ * a badge.
+ */
+function chainStatus(verification: DashboardState["audit"]["verification"]) {
+  if (verification.valid) {
+    return {
+      label: `VERIFIED (${verification.length}/${verification.length})`,
+      className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+      icon: <ShieldCheck className="size-3" />,
+    };
+  }
+  const truncated = verification.reason === "sequence gap or reorder";
+  return truncated
+    ? {
+        label: `TRUNCATED at seq ${verification.brokenAtSeq}`,
+        className: "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300",
+        icon: <ShieldAlert className="size-3" />,
+      }
+    : {
+        label: `TAMPERED at seq ${verification.brokenAtSeq}`,
+        className: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+        icon: <ShieldAlert className="size-3" />,
+      };
+}
 
 export function StatusBar({
   data,
@@ -15,15 +75,17 @@ export function StatusBar({
   redTeamBusy,
   refreshing,
   onRefresh,
+  onSwitchProfile,
 }: {
   data: DashboardState;
   onRedTeam: () => void;
   redTeamBusy: boolean;
   refreshing: boolean;
   onRefresh: () => void;
+  onSwitchProfile: (profile: ProfileId) => void;
 }) {
   const live = data.engine.optimization_source === "python-fastapi";
-  const chain = data.audit.verification;
+  const chain = chainStatus(data.audit.verification);
 
   const download = () => {
     const jsonl = data.audit.entries.map((entry) => JSON.stringify(entry)).join("\n");
@@ -38,13 +100,46 @@ export function StatusBar({
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-        <div>
-          <h1 className="text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-50">
             {data.company_name ?? "SME"}
           </h1>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
             Vantora recovery copilot · {data.seed.source} · plan {data.plan_id}
           </p>
+        </div>
+
+        <div
+          role="group"
+          aria-label="Sandbox SME profile"
+          className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-slate-200 p-1 dark:border-slate-800"
+        >
+          {data.profile.available.map((option) => {
+            const active = option.id === data.profile.id;
+            const style = BAND_STYLE[option.alert_band];
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onSwitchProfile(option.id)}
+                disabled={refreshing || active}
+                aria-pressed={active}
+                title={option.headline}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors",
+                  active
+                    ? cn("border", style.active)
+                    : "border border-transparent text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-400 dark:hover:bg-slate-800",
+                )}
+              >
+                <span className={cn("size-1.5 rounded-full", style.dot)} />
+                {SHORT_NAME[option.id] ?? option.label}
+                <span className="font-mono text-[10px] opacity-70">
+                  [{BAND_CAPTION[option.alert_band] ?? option.alert_band}]
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <Badge
@@ -60,18 +155,9 @@ export function StatusBar({
           {live ? "Python HiGHS MILP Engine: Connected" : "Deterministic TS Mirror: Active"}
         </Badge>
 
-        <Badge
-          variant="outline"
-          className={cn(
-            "gap-1.5 border-transparent font-mono text-[10px]",
-            chain.valid
-              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-              : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
-          )}
-        >
-          {chain.valid ? <ShieldCheck className="size-3" /> : <ShieldAlert className="size-3" />}
-          SHA-256 Audit Chain:{" "}
-          {chain.valid ? `VERIFIED (${chain.length}/${chain.length})` : `BROKEN at seq ${chain.brokenAtSeq}`}
+        <Badge variant="outline" className={cn("gap-1.5 border-transparent font-mono text-[10px]", chain.className)}>
+          {chain.icon}
+          SHA-256 Audit Chain: {chain.label}
         </Badge>
 
         <Badge variant="outline" className="gap-1.5 font-mono text-[10px]">
@@ -84,8 +170,14 @@ export function StatusBar({
             {refreshing ? <Loader2 className="size-4 animate-spin" /> : null}
             Refresh
           </Button>
-          <Button size="sm" variant="destructive" onClick={onRedTeam} disabled={redTeamBusy} className="text-[11px]">
-            {redTeamBusy ? <Loader2 className="size-4 animate-spin" /> : <ShieldAlert className="size-4" />}
+          {/* Outline, not destructive: running the drill is a safe, routine
+              check. Alarm red is reserved for an actual shortfall or breach. */}
+          <Button size="sm" variant="outline" onClick={onRedTeam} disabled={redTeamBusy} className="text-[11px]">
+            {redTeamBusy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Shield className="size-4 text-slate-500 dark:text-slate-400" />
+            )}
             Run red-team security drill
           </Button>
           <Button size="sm" variant="outline" onClick={download} className="text-[11px]">

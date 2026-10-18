@@ -4,13 +4,13 @@
  * Tab 3 — Copilot Action Center.
  *
  * The queue is the point: a Tier 1 draft is produced and shown, and nothing
- * moves to execution without a human minting an HMAC token for that exact plan.
- * The "without token" button is kept next to the real one so the denial is a
- * visible, auditable outcome rather than a claim in a README.
+ * moves to execution without a human reading what the action actually does and
+ * typing the amount back. The gate is proven by the red-team drill, not by a
+ * bypass button sitting next to the real one.
  */
 
 import { useState } from "react";
-import { KeyRound, Loader2, Send, ShieldX, Sparkles } from "lucide-react";
+import { KeyRound, Loader2, Lock, Send, ShieldCheck, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -26,12 +27,37 @@ import type { ActionResult, CopilotTurnResponse, DashboardState } from "@/lib/da
 import { cn } from "@/lib/utils";
 
 import { askCopilotQuestion, requestApproval, runTool } from "./client-api";
-import { AttestedBadge, DecisionBadge, DeterministicBadge, money2, SectionHeading, TierBadge } from "./primitives";
+import { AttestationPopover } from "./attestation";
+import { AttestedBadge, DecisionBadge, DeterministicBadge, money, money2, pct, SectionHeading, TierBadge } from "./primitives";
 
 interface Draft {
   tool: string;
   title: string;
   result: ActionResult;
+}
+
+/** One Tier 2 action, with everything the approval dialog has to disclose. */
+interface Tier2Entry {
+  operation: string;
+  title: string;
+  detail: string;
+  input: Record<string, unknown>;
+  /** Dialog heading: "Authorize Tier-2 Action: …". */
+  authorize: string;
+  counterparty: string;
+  moneyLeaves: string;
+  moneyArrives: string;
+  obligation: string;
+  /** The figure the approver must type back, and which the token binds to. */
+  confirmAmount: number;
+}
+
+const ACCOUNT_LABEL = "Apex Operating account ••4471";
+
+/** `d` days from today, as a human date. Called only inside an open dialog. */
+function offsetDate(days: number): string {
+  const date = new Date(Date.now() + days * 86_400_000);
+  return date.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }
 
 const SUGGESTED = [
@@ -77,6 +103,8 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
   const [turns, setTurns] = useState<CopilotTurnResponse[]>([]);
   const [question, setQuestion] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [approving, setApproving] = useState<Tier2Entry | null>(null);
+  const [typed, setTyped] = useState("");
 
   const guard = async (key: string, work: () => Promise<void>) => {
     setBusy(key);
@@ -99,17 +127,15 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
       setPreview(draft);
     });
 
-  const executeWithApproval = (operation: string, input: Record<string, unknown>) =>
-    guard(`approve:${operation}`, async () => {
-      const approval = await requestApproval(operation);
-      const result = await runTool(operation, input, approval.userApprovalToken);
+  const executeWithApproval = (entry: Tier2Entry) =>
+    guard(`approve:${entry.operation}`, async () => {
+      // Same input on both calls, and the amount the human typed travels with
+      // the mint: the token is bound to this exact payload and this figure.
+      const approval = await requestApproval(entry.operation, entry.input, entry.confirmAmount);
+      const result = await runTool(entry.operation, entry.input, approval.userApprovalToken);
       setExecutions((current) => [result, ...current]);
-    });
-
-  const executeWithoutToken = (operation: string, input: Record<string, unknown>) =>
-    guard(`deny:${operation}`, async () => {
-      const result = await runTool(operation, input);
-      setExecutions((current) => [result, ...current]);
+      setApproving(null);
+      setTyped("");
     });
 
   const ask = (text: string) =>
@@ -119,35 +145,61 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
       setQuestion("");
     });
 
-  const tier2 = [
+  const draw = plan.actions.find((a) => a.kind === "bridge_draw");
+  const drawOption = draw ? data.state.financing_options.find((f) => f.id === draw.target_id) : undefined;
+  const deferralPayable = deferral
+    ? data.state.payables_ap.find((p) => p.id === deferral.target_id)
+    : undefined;
+  const crunchDay = data.optimization.crunch_day;
+
+  const tier2: Tier2Entry[] = ([
     {
-      operation: "execute_recovery_plan",
+      operation: "execute_recovery_plan" as const,
       title: "Execute the full recovery plan in the sandbox",
       detail: `${plan.actions.length} actions · ${money2(plan.total_cost)} · restores P10 to ${money2(
         plan.post_recovery_p10_balance,
       )}`,
       input: { plan_id: data.plan_id },
+      authorize: "Execute the full recovery plan",
+      counterparty: `${plan.actions.length} counterparties across AR, AP and financing`,
+      moneyLeaves: `${money2(plan.total_cost)} in fees and discounts`,
+      moneyArrives: `${money(plan.cash_raised)} of working capital, by day ${crunchDay}`,
+      obligation: `Each action settles on its own terms; the plan itself adds no new debt beyond the draws listed in it.`,
+      confirmAmount: plan.total_cost,
     },
-    deferral
+    deferral && deferralPayable
       ? {
           operation: "send_supplier_deferral_email",
           title: `Send the deferral request to ${deferral.target_id}`,
           detail: deferral.label,
           input: { payable_id: deferral.target_id, plan_id: data.plan_id },
+          authorize: `Send a payment-deferral request to ${deferralPayable.supplier_name}`,
+          counterparty: `${deferralPayable.supplier_name} (existing trade account)`,
+          moneyLeaves: "Nothing today",
+          moneyArrives: `${money(deferralPayable.amount)} stays in the account past day ${deferralPayable.due_day}`,
+          obligation: `${money2(deferralPayable.amount + (deferralPayable.deferral_fee_pct ?? 0) * deferralPayable.amount)} on ${offsetDate(
+            deferralPayable.due_day + (deferralPayable.max_deferral_days ?? 0),
+          )} (${deferralPayable.max_deferral_days}d deferral @ ${pct(deferralPayable.deferral_fee_pct ?? 0, 2)} fee)`,
+          confirmAmount: deferralPayable.amount,
         }
       : null,
-    (() => {
-      const draw = plan.actions.find((a) => a.kind === "bridge_draw");
-      return draw
-        ? {
-            operation: "accept_financing_offer",
-            title: `Draw down ${draw.target_id}`,
-            detail: `${draw.label} · ${money2(draw.cost)} cost`,
-            input: { financing_id: draw.target_id, amount: draw.cash_impact, plan_id: data.plan_id },
-          }
-        : null;
-    })(),
-  ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    draw && drawOption
+      ? {
+          operation: "accept_financing_offer",
+          title: `Draw down ${draw.target_id}`,
+          detail: `${draw.label} · ${money2(draw.cost)} cost`,
+          input: { financing_id: draw.target_id, amount: draw.cash_impact, plan_id: data.plan_id },
+          authorize: `Draw on the ${drawOption.provider} line`,
+          counterparty: `${drawOption.provider} (existing pre-approved line)`,
+          moneyLeaves: "Nothing today",
+          moneyArrives: `${money(draw.cash_impact)} into ${ACCOUNT_LABEL}`,
+          obligation: `${money2(draw.cash_impact + draw.cost)} on ${offsetDate(30)} (30 days @ ${pct(
+            drawOption.apr,
+          )} APR)`,
+          confirmAmount: draw.cash_impact,
+        }
+      : null,
+  ] as (Tier2Entry | null)[]).filter((entry): entry is Tier2Entry => entry !== null);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
@@ -160,7 +212,14 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
                 Copilot briefing
               </CardTitle>
               <div className="flex flex-wrap gap-1.5">
-                <AttestedBadge ok={data.copilot.narrative_integrity.ok} />
+                <AttestationPopover
+                  integrity={data.copilot.narrative_integrity}
+                  source={
+                    data.copilot.anthropic_key_present
+                      ? `${data.copilot.model} with engine tools`
+                      : "the deterministic synthesiser"
+                  }
+                />
                 <DeterministicBadge
                   method={
                     data.copilot.anthropic_key_present
@@ -177,7 +236,9 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col gap-2 text-xs leading-relaxed text-slate-700 tabular-nums dark:text-slate-300">
+            {/* No tabular-nums on prose: fixed-advance digits inside running
+                text stretch the words around them and read as a spreadsheet. */}
+            <div className="flex flex-col gap-2 text-xs leading-relaxed text-slate-700 dark:text-slate-300">
               {data.copilot.narrative.split("\n\n").map((paragraph, index) => (
                 <p key={index} className={cn(paragraph.startsWith("- ") && "pl-3 text-slate-600 dark:text-slate-400")}>
                   {paragraph.replace(/\*\*/g, "")}
@@ -240,7 +301,7 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
                     </Badge>
                   </div>
                 </div>
-                <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed tabular-nums text-slate-700 dark:text-slate-300">
+                <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-700 dark:text-slate-300">
                   {turn.answer}
                 </p>
                 {turn.tool_runs.length ? (
@@ -336,8 +397,8 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
           <CardHeader>
             <SectionHeading title="Tier 2 execution queue" hint="human approval required" />
             <CardDescription className="text-xs">
-              The left button mints an HMAC token bound to this operation and this plan, then executes in the
-              sandbox. The right one calls the same tool with no token, so you can watch the gate refuse it.
+              Each action opens a confirmation that discloses where the money goes and asks you to type the
+              amount back. Only then is an HMAC token minted, bound to that exact payload and figure.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -359,7 +420,10 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
                   <Button
                     size="sm"
                     disabled={busy !== null}
-                    onClick={() => executeWithApproval(entry.operation, entry.input)}
+                    onClick={() => {
+                      setTyped("");
+                      setApproving(entry);
+                    }}
                     className="text-[11px]"
                   >
                     {busy === `approve:${entry.operation}` ? (
@@ -367,21 +431,7 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
                     ) : (
                       <KeyRound className="size-4" />
                     )}
-                    Issue HMAC token &amp; execute
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    disabled={busy !== null}
-                    onClick={() => executeWithoutToken(entry.operation, entry.input)}
-                    className="text-[11px]"
-                  >
-                    {busy === `deny:${entry.operation}` ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <ShieldX className="size-4" />
-                    )}
-                    Execute without token
+                    Review &amp; approve
                   </Button>
                 </div>
               </div>
@@ -389,9 +439,40 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
             {executions.map((result, index) => (
               <GateTrace key={`${result.tool}-${result.seq}-${index}`} result={result} />
             ))}
+            {/* The bypass button that used to sit here is gone: a one-click
+                "execute without token" next to the real control is a footgun in
+                a product, and the drill already proves the gate refuses it. */}
+            <p className="flex items-start gap-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-slate-400" />
+              Protected by the 4-tier permission gate — unauthorised calls are blocked without a human token
+              (proven live in the security drill).
+            </p>
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={approving !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setApproving(null);
+            setTyped("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl">
+          {approving ? (
+            <ApprovalDialogBody
+              entry={approving}
+              data={data}
+              typed={typed}
+              onTyped={setTyped}
+              busy={busy === `approve:${approving.operation}`}
+              onConfirm={() => executeWithApproval(approving)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={preview !== null} onOpenChange={(open) => (open ? null : setPreview(null))}>
         <DialogContent className="max-w-2xl">
@@ -407,6 +488,121 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function DisclosureRow({ label, value, tone }: { label: string; value: string; tone?: "good" | "warn" }) {
+  return (
+    <div className="grid grid-cols-[9.5rem_1fr] gap-x-3 gap-y-0.5 border-t border-slate-100 py-1.5 first:border-t-0 dark:border-slate-800">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "text-xs tabular-nums",
+          tone === "good" && "font-medium text-emerald-600 dark:text-emerald-400",
+          tone === "warn" && "font-medium text-amber-700 dark:text-amber-400",
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The cognitive-review step.
+ *
+ * Reading is not consent, and clicking is not reading. The amount has to be
+ * typed back, which is the only interaction that cannot be performed by
+ * muscle memory — and the typed figure is what gets hashed into the token.
+ */
+function ApprovalDialogBody({
+  entry,
+  data,
+  typed,
+  onTyped,
+  busy,
+  onConfirm,
+}: {
+  entry: Tier2Entry;
+  data: DashboardState;
+  typed: string;
+  onTyped: (next: string) => void;
+  busy: boolean;
+  onConfirm: () => void;
+}) {
+  const plan = data.optimization.optimal_plan;
+  const crunchDay = data.optimization.crunch_day;
+  const crunchP10 = data.forecast.p10_trajectory[crunchDay - 1];
+  // Accept "2345", "2,345" and "2345.00": commas and a trailing .00 are how a
+  // human writes money, not a different number.
+  const normalised = Number(typed.replace(/[,\s$]/g, ""));
+  const matches = Number.isFinite(normalised) && Math.abs(normalised - entry.confirmAmount) < 0.005;
+  const target = entry.confirmAmount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle className="text-sm">Authorize Tier-2 action: {entry.authorize}</DialogTitle>
+        <DialogDescription className="text-xs">
+          Executed in the sandbox against the seeded dataset. Read the cash direction before confirming.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="rounded-md border border-slate-200 px-3 py-1 dark:border-slate-800">
+        <DisclosureRow label="Money leaves" value={entry.moneyLeaves} />
+        <DisclosureRow label="Money arrives" value={entry.moneyArrives} tone="good" />
+        <DisclosureRow label="Obligation" value={entry.obligation} tone="warn" />
+        <DisclosureRow label="Counterparty" value={entry.counterparty} />
+        <DisclosureRow
+          label={`Impact on day ${crunchDay}`}
+          value={
+            plan.feasible
+              ? `Cash restored from ${money(crunchP10)} to ${money(plan.post_recovery_p10_balance)} — safe buffer maintained`
+              : `No feasible plan; the day-${crunchDay} gap stays open`
+          }
+          tone={plan.feasible ? "good" : undefined}
+        />
+      </div>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium">
+          Type <span className="font-mono tabular-nums">{target}</span> to confirm
+        </span>
+        <input
+          value={typed}
+          onChange={(event) => onTyped(event.target.value)}
+          inputMode="decimal"
+          autoComplete="off"
+          aria-label={`Type ${target} to confirm`}
+          placeholder={target}
+          className={cn(
+            "h-9 rounded-md border bg-white px-3 font-mono text-sm tabular-nums outline-none dark:bg-slate-950",
+            matches
+              ? "border-emerald-500 focus-visible:border-emerald-500"
+              : "border-slate-200 focus-visible:border-slate-400 dark:border-slate-800",
+          )}
+        />
+      </label>
+
+      <p className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-relaxed text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+        This action issues a single-use HMAC token bound to this exact payload and amount. Once transmitted,
+        the sandbox facility draw cannot be recalled from this interface.
+      </p>
+
+      <p className="font-mono text-[10px] text-slate-500 dark:text-slate-500">
+        Solver: {data.engine.optimization_source === "python-fastapi" ? "HiGHS MILP" : "TS mirror"} · Plan:{" "}
+        {data.plan_id} · Sequence: next append
+      </p>
+
+      <DialogFooter>
+        <Button size="sm" disabled={!matches || busy} onClick={onConfirm} className="text-[11px]">
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}
+          Sign &amp; send — {money(entry.confirmAmount)}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

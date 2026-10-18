@@ -11,24 +11,34 @@ import {
   hasAnthropicKey,
   loadCopilotContext,
   recoveryPlanId,
+  screenInvoiceMemos,
   synthesizeNarrative,
   COPILOT_MODEL,
   COPILOT_TOOLS,
 } from "./agent/vantora-copilot";
 import type { DashboardState } from "./dashboard-state";
-import { engineHealth, postRecoveryP10Trajectory } from "./quant-client";
+import { engineHealth, postRecoveryP10Trajectory, procrastinationCurve } from "./quant-client";
 import { readChain, verifyChain } from "./sandbox/execution-logger";
-import { APEX_INVOICE_MEMOS, apexFinancialState, seedApexDataset } from "./sandbox/seed-data";
 import {
-  classifyOperation,
-  detectIndirectPromptInjection,
-  verifyNumericalIntegrity,
-} from "./security/permission-gate";
+  DEFAULT_SME_PROFILE,
+  SME_PROFILES,
+  seedApexDataset,
+  smeFinancialState,
+  type SmeProfileId,
+} from "./sandbox/seed-data";
+import { classifyOperation, verifyNumericalIntegrity } from "./security/permission-gate";
 
-export async function buildDashboardState(): Promise<DashboardState> {
-  const seed = await seedApexDataset();
-  const state = apexFinancialState();
-  const ctx = await loadCopilotContext(state, seed.smeProfileId);
+export async function buildDashboardState(
+  profileId: SmeProfileId = DEFAULT_SME_PROFILE,
+  correlationRho = 0,
+): Promise<DashboardState> {
+  const profile = SME_PROFILES[profileId];
+  const seed = await seedApexDataset(profileId);
+  // rho = 0 reproduces the canonical dataset exactly; above it the forecast is
+  // re-run with one systemic delay factor shared by the whole receivables book.
+  const base = smeFinancialState(profileId);
+  const state = correlationRho > 0 ? { ...base, correlation_rho: correlationRho } : base;
+  const ctx = await loadCopilotContext(state, seed.smeProfileId, profileId);
   const { forecast, optimization } = ctx;
 
   const narrative = synthesizeNarrative(ctx);
@@ -36,7 +46,20 @@ export async function buildDashboardState(): Promise<DashboardState> {
 
   return {
     company_name: state.company_name,
-    plan_id: recoveryPlanId(optimization),
+    plan_id: recoveryPlanId(optimization, profileId),
+    profile: {
+      id: profile.id,
+      industry: profile.industry,
+      alert_band: profile.alert_band,
+      headline: profile.headline,
+      available: Object.values(SME_PROFILES).map((p) => ({
+        id: p.id,
+        alert_band: p.alert_band,
+        label: p.state.company_name ?? p.id,
+        headline: p.headline,
+      })),
+    },
+    correlation_rho: state.correlation_rho ?? 0,
     seed: { ...seed, source: seed.mode === "prisma" ? "Supabase (Prisma)" : "In-memory dataset" },
     engine: {
       python_engine_up: await engineHealth(),
@@ -59,19 +82,10 @@ export async function buildDashboardState(): Promise<DashboardState> {
     forecast,
     optimization,
     post_recovery_p10_trajectory: postRecoveryP10Trajectory(forecast, optimization),
-    // Memos are returned already screened and sanitised. The raw text never
-    // leaves this module, so nothing downstream can paste it into a prompt.
-    memos: Object.entries(APEX_INVOICE_MEMOS).map(([invoiceId, memo]) => {
-      const scan = detectIndirectPromptInjection(memo);
-      return {
-        invoice_id: invoiceId,
-        customer_name: state.invoices_ar.find((i) => i.id === invoiceId)?.customer_name ?? invoiceId,
-        quarantined: scan.injectionDetected,
-        severity: scan.severity,
-        matched_patterns: scan.matches.map((m) => m.name),
-        sanitized_excerpt: scan.sanitizedMemo,
-      };
-    }),
+    procrastination_curve: procrastinationCurve(state, forecast, optimization),
+    // Already screened and sanitised by the same function the agent read path
+    // uses. The raw text never leaves that module.
+    memos: screenInvoiceMemos(ctx),
     audit: { entries: chain, verification: verifyChain(chain) },
   };
 }

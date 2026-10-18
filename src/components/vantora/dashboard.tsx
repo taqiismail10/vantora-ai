@@ -24,6 +24,7 @@ import { LiquidityRadar } from "./liquidity-radar";
 import { DecisionBadge, SectionHeading, TierBadge } from "./primitives";
 import { RecoveryOptimizer } from "./recovery-optimizer";
 import { StatusBar } from "./status-bar";
+import { VerdictBar } from "./verdict-bar";
 
 export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const [data, setData] = useState<DashboardState>(initial);
@@ -31,25 +32,45 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const [refreshing, setRefreshing] = useState(false);
   const [redTeam, setRedTeam] = useState<RedTeamResult | null>(null);
   const [redTeamBusy, setRedTeamBusy] = useState(false);
+  const [tab, setTab] = useState("liquidity");
+  // The profile and rho live here, not in the tabs: every refresh has to carry
+  // them or switching SME would silently snap back to Apex on the next action.
+  const [profile, setProfile] = useState(initial.profile.id);
+  const [rho, setRho] = useState(initial.correlation_rho);
 
   // No state is set before the first `await`, so the mount effect below does not
   // trigger a cascading render (react-hooks/set-state-in-effect).
-  const refresh = useCallback(async () => {
-    try {
-      setData(await fetchDashboardState());
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, []);
+  const refresh = useCallback(
+    async (next: { profile?: string; rho?: number } = {}) => {
+      const query = { profile: next.profile ?? profile, rho: next.rho ?? rho };
+      try {
+        setData(await fetchDashboardState(query));
+        setError(null);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    },
+    [profile, rho],
+  );
 
-  const refreshWithSpinner = async () => {
+  const refreshWithSpinner = async (next: { profile?: string; rho?: number } = {}) => {
     setRefreshing(true);
     try {
-      await refresh();
+      await refresh(next);
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const switchProfile = async (next: DashboardState["profile"]["id"]) => {
+    setProfile(next);
+    setTab("liquidity"); // a new SME's verdict belongs on the first tab
+    await refreshWithSpinner({ profile: next });
+  };
+
+  const switchRho = async (next: number) => {
+    setRho(next);
+    await refreshWithSpinner({ rho: next });
   };
 
   const drill = async () => {
@@ -76,31 +97,48 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
         onRedTeam={drill}
         redTeamBusy={redTeamBusy}
         refreshing={refreshing}
-        onRefresh={refreshWithSpinner}
+        onRefresh={() => refreshWithSpinner()}
+        onSwitchProfile={switchProfile}
       />
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
-        <Tabs defaultValue="liquidity">
-          <TabsList className="h-9">
-            <TabsTrigger value="liquidity">Liquidity radar</TabsTrigger>
-            <TabsTrigger value="optimizer">Recovery optimizer</TabsTrigger>
-            <TabsTrigger value="copilot">Copilot action center</TabsTrigger>
-            <TabsTrigger value="ledger">Security &amp; ledger</TabsTrigger>
-          </TabsList>
+      {/* overflow-x-hidden is the page-level guarantee: any child that
+          overflows scrolls inside itself rather than moving the whole page. */}
+      <main className="mx-auto w-full max-w-[1600px] flex-1 overflow-x-hidden px-4 py-4">
+        <div className="flex flex-col gap-4">
+          <VerdictBar data={data} onReviewPlan={() => setTab("optimizer")} />
 
-          <TabsContent value="liquidity" className="pt-4">
-            <LiquidityRadar data={data} />
-          </TabsContent>
-          <TabsContent value="optimizer" className="pt-4">
-            <RecoveryOptimizer data={data} />
-          </TabsContent>
-          <TabsContent value="copilot" className="pt-4">
-            <ActionCenter data={data} onLedgerChanged={refresh} />
-          </TabsContent>
-          <TabsContent value="ledger" className="pt-4">
-            <AuditLedger data={data} />
-          </TabsContent>
-        </Tabs>
+          <Tabs value={tab} onValueChange={setTab}>
+            {/* w-full + overflow-x-auto keeps the 4th tab reachable at 360px;
+                shrink-0 stops the triggers compressing into unreadable stubs. */}
+            <TabsList className="h-9 w-full justify-start overflow-x-auto">
+              <TabsTrigger value="liquidity" className="shrink-0">
+                Liquidity radar
+              </TabsTrigger>
+              <TabsTrigger value="optimizer" className="shrink-0">
+                Recovery optimizer
+              </TabsTrigger>
+              <TabsTrigger value="copilot" className="shrink-0">
+                Copilot action center
+              </TabsTrigger>
+              <TabsTrigger value="ledger" className="shrink-0">
+                Security &amp; ledger
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="liquidity" className="pt-4">
+              <LiquidityRadar data={data} rho={rho} onRhoChange={switchRho} busy={refreshing} />
+            </TabsContent>
+            <TabsContent value="optimizer" className="pt-4">
+              <RecoveryOptimizer data={data} onApprove={() => setTab("copilot")} />
+            </TabsContent>
+            <TabsContent value="copilot" className="pt-4">
+              <ActionCenter data={data} onLedgerChanged={refresh} />
+            </TabsContent>
+            <TabsContent value="ledger" className="pt-4">
+              <AuditLedger data={data} />
+            </TabsContent>
+          </Tabs>
+        </div>
       </main>
 
       <Dialog open={redTeam !== null} onOpenChange={(open) => (open ? null : setRedTeam(null))}>

@@ -34,6 +34,7 @@ import {
   detectIndirectPromptInjection,
   enforcePermissionGate,
   issueApprovalToken,
+  maxTier,
   verifyApprovalToken,
   verifyNumericalIntegrity,
   type GateResult,
@@ -109,6 +110,7 @@ beforeAll(async () => {
       operation: "execute_recovery_plan",
       planId: PLAN_ID,
       actorId: "human:owner@apexmfg.example",
+      payload: executeArgs,
     }),
   });
 
@@ -172,6 +174,47 @@ beforeAll(async () => {
     operation: "read_sme_profile",
     actorId: ACTOR,
     untrustedContext: BENIGN_INVOICE_MEMO,
+  });
+
+  // ---- (a) the $2,345 Meridian approval, replayed against $90,000 QuickFloat
+  const meridianDraw = { financing_id: "FIN-MERIDIAN", amount: 2_345, plan_id: PLAN_ID };
+  const meridianToken = issueApprovalToken({
+    operation: "accept_financing_offer",
+    planId: PLAN_ID,
+    actorId: "human:owner@apexmfg.example",
+    payload: meridianDraw,
+    confirmedAmount: 2_345,
+  });
+
+  results.payloadMismatch = await enforcePermissionGate({
+    operation: "accept_financing_offer",
+    actorId: ACTOR,
+    planId: PLAN_ID,
+    payload: { financing_id: "FIN-QUICKFLOAT", amount: 90_000, plan_id: PLAN_ID },
+    userApprovalToken: meridianToken,
+  });
+
+  // ---- (b) the same token, used twice for the payload it *was* minted for
+  results.firstUse = await enforcePermissionGate({
+    operation: "accept_financing_offer",
+    actorId: ACTOR,
+    planId: PLAN_ID,
+    payload: meridianDraw,
+    userApprovalToken: meridianToken,
+  });
+  results.replayedUse = await enforcePermissionGate({
+    operation: "accept_financing_offer",
+    actorId: ACTOR,
+    planId: PLAN_ID,
+    payload: meridianDraw,
+    userApprovalToken: meridianToken,
+  });
+
+  // ---- (c) caller claims Tier 0 for a Tier 3 operation
+  results.tierDowngrade = await enforcePermissionGate({
+    operation: "wire_funds_to_external_account",
+    actorId: ACTOR,
+    tier: PERMISSION_TIERS.TIER_0_AUTO_READ,
   });
 });
 
@@ -259,6 +302,70 @@ describe("permission tiers", () => {
   it("TIER_3 is denied even with a correctly signed token", () => {
     expect(results.prohibitedWithToken.decision).toBe("DENIED");
     expect(results.prohibitedWithToken.reason).toMatch(/TIER_3_PROHIBITED/);
+  });
+
+  it("clamps a caller-supplied tier to the registry: TIER_3 cannot be downgraded", () => {
+    expect(results.tierDowngrade.tier).toBe(PERMISSION_TIERS.TIER_3_PROHIBITED);
+    expect(results.tierDowngrade.decision).toBe("DENIED");
+    expect(results.tierDowngrade.allowed).toBe(false);
+  });
+
+  it("lets a caller raise its own tier but never lower it", () => {
+    expect(maxTier(PERMISSION_TIERS.TIER_3_PROHIBITED, PERMISSION_TIERS.TIER_0_AUTO_READ)).toBe(
+      PERMISSION_TIERS.TIER_3_PROHIBITED,
+    );
+    expect(maxTier(PERMISSION_TIERS.TIER_0_AUTO_READ, PERMISSION_TIERS.TIER_2_HITL_APPROVAL)).toBe(
+      PERMISSION_TIERS.TIER_2_HITL_APPROVAL,
+    );
+  });
+});
+
+// ------------------------------------------------- payload binding & single use
+
+describe("approval tokens bind to the exact payload", () => {
+  it("refuses a $2,345 Meridian token replayed against a $90,000 QuickFloat draw", () => {
+    expect(results.payloadMismatch.decision).toBe("DENIED");
+    expect(results.payloadMismatch.reason).toMatch(/payloadDigest mismatch/);
+    expect(results.payloadMismatch.tokenVerification?.valid).toBe(false);
+  });
+
+  it("allows the draw the human actually approved", () => {
+    expect(results.firstUse.decision).toBe("ALLOWED");
+    expect(results.firstUse.tokenVerification?.valid).toBe(true);
+  });
+
+  it("burns the nonce: the same token cannot be presented twice", () => {
+    expect(results.replayedUse.decision).toBe("DENIED");
+    expect(results.replayedUse.reason).toMatch(/already been consumed/);
+  });
+
+  it("carries a payload digest and a unique jti in every token", () => {
+    const claims = (token: string) =>
+      JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    const mint = () =>
+      issueApprovalToken({ operation: "execute_recovery_plan", planId: PLAN_ID, actorId: "human:x" });
+    const a = claims(mint());
+    const b = claims(mint());
+    expect(a.payloadDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.jti).not.toBe(b.jti);
+  });
+
+  it("cross-checks the amount the human typed", () => {
+    const payload = { financing_id: "FIN-MERIDIAN", amount: 2_345 };
+    const token = issueApprovalToken({
+      operation: "accept_financing_offer",
+      planId: PLAN_ID,
+      actorId: "human:x",
+      payload,
+      confirmedAmount: 9_999,
+    });
+    const check = verifyApprovalToken(token, {
+      operation: "accept_financing_offer",
+      planId: PLAN_ID,
+      payload,
+    });
+    expect(check.valid).toBe(false);
+    expect(check.reason).toMatch(/confirmed for 9999/);
   });
 });
 
@@ -384,6 +491,33 @@ describe("indirect prompt injection", () => {
     expect(scan.injectionDetected).toBe(false);
     expect(scan.severity).toBe("none");
     expect(results.benignMemo.decision).toBe("ALLOWED");
+  });
+
+  // The two strings that used to hard-deny a clean invoice: a remittance
+  // account number, and the word "secret" in its ordinary commercial sense.
+  it.each([
+    ["remittance advice", "Payment for order 4471. Please quote account #10044821 on remittance. Net-30."],
+    ["NDA boilerplate", "Our proprietary coating is a trade secret; handle drawings per the NDA."],
+    ["bank detail restatement", "Remit to the usual account on file; our bank details have not changed."],
+    ["password-free IT note", "Portal access is unchanged — your buyer logs in with the same credentials."],
+  ])("passes real B2B text without a false positive: %s", (_label, memo) => {
+    const scan = detectIndirectPromptInjection(memo);
+    expect(scan.matches.map((m) => m.name)).toEqual([]);
+    expect(scan.injectionDetected).toBe(false);
+  });
+
+  it("still fires all six detectors on the planted memo", () => {
+    const names = detectIndirectPromptInjection(MALICIOUS_INVOICE_MEMO).matches.map((m) => m.name);
+    expect(new Set(names)).toEqual(
+      new Set([
+        "system_override",
+        "ignore_previous_instructions",
+        "wire_to_external_account",
+        "account_number_injection",
+        "bypass_approval",
+        "forged_authority",
+      ]),
+    );
   });
 
   it("treats empty and missing memos as clean", () => {

@@ -10,10 +10,11 @@ import type {
   EngineSource,
   ForecastResult,
   OptimizationResult,
+  ProcrastinationPoint,
   SmeFinancialState,
 } from "./quant-client";
 import type { NumericalIntegrityResult, PermissionTier } from "./security/permission-gate";
-import type { SeedResult } from "./sandbox/seed-data";
+import type { SeedResult, SmeSandboxProfile } from "./sandbox/seed-data";
 
 export interface MemoScreen {
   invoice_id: string;
@@ -21,12 +22,19 @@ export interface MemoScreen {
   quarantined: boolean;
   severity: "none" | "suspicious" | "critical";
   matched_patterns: string[];
+  matched_text: string[];
   sanitized_excerpt: string;
 }
 
 export interface DashboardState {
   company_name?: string;
   plan_id: string;
+  /** Which sandbox SME is loaded, and the band its dataset is shaped to produce. */
+  profile: Pick<SmeSandboxProfile, "id" | "industry" | "alert_band" | "headline"> & {
+    available: (Pick<SmeSandboxProfile, "id" | "alert_band" | "headline"> & { label: string })[];
+  };
+  /** The systemic delay correlation this payload was forecast under. */
+  correlation_rho: number;
   seed: SeedResult & { source: string };
   engine: {
     python_engine_up: boolean;
@@ -45,6 +53,8 @@ export interface DashboardState {
   forecast: ForecastResult;
   optimization: OptimizationResult;
   post_recovery_p10_trajectory: number[];
+  /** What the same plan costs at each decision horizon before the crunch. */
+  procrastination_curve: ProcrastinationPoint[];
   memos: MemoScreen[];
   audit: { entries: AuditLogEntry[]; verification: ChainVerification };
 }

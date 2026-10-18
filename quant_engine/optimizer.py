@@ -66,6 +66,7 @@ def _do_nothing_plan(
     gap = required
     actions: list[PlanAction] = []
     cost = 0.0
+    breaches_payroll = False
     due_first = sorted((p for p in state.payables_ap if p.due_day >= crunch_day), key=lambda p: p.due_day)
     for ap in due_first:
         if gap <= 0:
@@ -77,6 +78,9 @@ def _do_nothing_plan(
         detail = "{:.1%} late fee".format(ap.late_fee_pct)
         if ap.is_critical:
             detail += " + ${:,.0f} default penalty".format(ap.default_penalty)
+        if ap.is_payroll:
+            breaches_payroll = True
+            detail = "STATUTORY BREACH: wages unpaid on the due date. " + detail
         actions.append(
             PlanAction(
                 kind="missed_payable",
@@ -87,6 +91,14 @@ def _do_nothing_plan(
                 detail=detail,
             )
         )
+    notes = "${:,.0f} of obligations go unfunded on day {}; cash stays below the safe buffer.".format(
+        required, crunch_day
+    )
+    if breaches_payroll:
+        # Wages are not a line item to trade off against a late fee: unpaid
+        # payroll is a statutory breach, so this baseline is not an option the
+        # owner may choose at any price.
+        notes += " Payroll goes unpaid, which is a statutory breach -- not a priced trade-off."
     return RecoveryPlan(
         name="Baseline: do nothing",
         actions=actions,
@@ -94,9 +106,9 @@ def _do_nothing_plan(
         total_cost=round(cost, 2),
         post_recovery_p10_balance=round(p10, 2),
         meets_buffer=False,
-        notes="${:,.0f} of obligations go unfunded on day {}; cash stays below the safe buffer.".format(
-            required, crunch_day
-        ),
+        feasible=not breaches_payroll,
+        breaches_statutory_payroll=breaches_payroll,
+        notes=notes,
     )
 
 
@@ -137,7 +149,60 @@ def _naive_borrowing_plan(
         total_cost=round(cost, 2),
         post_recovery_p10_balance=round(p10 + draw, 2),
         meets_buffer=p10 + draw >= state.minimum_safe_buffer - 1e-6,
+        feasible=p10 + draw >= state.minimum_safe_buffer - 1e-6,
         notes="Covers the gap but ignores free working-capital levers and takes the costliest capital.",
+    )
+
+
+ESCALATION_NOTE = (
+    "No combination of AR discounts, AP deferrals and eligible facilities closes the gap. "
+    "Escalate to a bank workout or an equity injection; drawing more debt into an unclosed "
+    "gap buys days and adds a creditor."
+)
+
+
+def _infeasible_result(
+    state: SmeFinancialStateInput,
+    matched: list[MatchedFinancingOption],
+    crunch_day: int,
+    required: float,
+    p10: float,
+    status: str,
+) -> OptimizationResultOutput:
+    headroom = sum(m.max_available for m in matched if m.eligible)
+    plan = RecoveryPlan(
+        name="Vantora optimal plan",
+        actions=[],
+        cash_raised=0.0,
+        total_cost=0.0,
+        post_recovery_p10_balance=round(p10, 2),
+        meets_buffer=False,
+        feasible=False,
+        notes=ESCALATION_NOTE,
+    )
+    do_nothing = _do_nothing_plan(state, crunch_day, required, p10)
+    naive = _naive_borrowing_plan(state, matched, crunch_day, required, p10)
+    return OptimizationResultOutput(
+        company_name=state.company_name,
+        crunch_day=crunch_day,
+        required_cash=round(required, 2),
+        optimal_plan=plan,
+        baseline_do_nothing_plan=do_nothing,
+        naive_borrowing_plan=naive,
+        matched_financing_options=matched,
+        solver_status="INFEASIBLE",
+        mathematical_proof_summary="\n".join(
+            [
+                "Crunch day {}: P10 cash ${:,.0f} vs safe buffer ${:,.0f} -> gap ${:,.0f}.".format(
+                    crunch_day, p10, state.minimum_safe_buffer, required
+                ),
+                "MILP status: {} -- the restore-to-buffer constraint admits no solution.".format(status),
+                "Total eligible facility headroom is ${:,.0f} against a ${:,.0f} gap.".format(headroom, required),
+                ESCALATION_NOTE,
+            ]
+        ),
+        savings_vs_naive=0.0,
+        savings_vs_do_nothing=0.0,
     )
 
 
@@ -226,6 +291,13 @@ def optimize(
     stats = problem.solve(pulp.getSolver("HiGHS", msg=False))
     status = stats.status.name
 
+    if status.upper() != "OPTIMAL":
+        # No admissible combination of levers reaches the buffer. Returning a
+        # best-effort partial draw would recommend taking predatory debt into a
+        # gap it cannot close; the honest output is that this is not a
+        # working-capital problem any more.
+        return _infeasible_result(state, matched, crunch_day, required, p10_at_crunch, status)
+
     actions: list[PlanAction] = []
     cash_raised = 0.0
     total_cost = 0.0
@@ -303,6 +375,7 @@ def optimize(
         total_cost=round(total_cost, 2),
         post_recovery_p10_balance=round(p10_at_crunch + cash_raised, 2),
         meets_buffer=p10_at_crunch + cash_raised >= state.minimum_safe_buffer - 1e-6,
+        feasible=p10_at_crunch + cash_raised >= state.minimum_safe_buffer - 1e-6,
         notes="MILP minimum-cost mix closing a ${:,.0f} gap on day {}.".format(required, crunch_day),
     )
 

@@ -22,12 +22,15 @@ import {
   type SmeFinancialState,
 } from "../quant-client";
 import {
-  APEX_INVOICE_MEMOS,
   APEX_PROFILE,
-  apexFinancialState,
+  DEFAULT_SME_PROFILE,
+  SME_PROFILES,
+  smeFinancialState,
   IN_MEMORY_PROFILE_ID,
+  type SmeProfileId,
 } from "../sandbox/seed-data";
 import {
+  detectIndirectPromptInjection,
   enforcePermissionGate,
   verifyNumericalIntegrity,
   type GateResult,
@@ -46,19 +49,33 @@ export interface CopilotContext {
   /** Stable across stateless requests so an HMAC token stays bindable to it. */
   planId: string;
   smeProfileId: string;
+  /** Which sandbox SME this context is for: it selects the memo set. */
+  sandboxProfile: SmeProfileId;
 }
 
-export function recoveryPlanId(optimization: OptimizationResult): string {
-  return `apex-recovery-d${optimization.crunch_day}`;
+export function recoveryPlanId(
+  optimization: OptimizationResult,
+  sandboxProfile: SmeProfileId = DEFAULT_SME_PROFILE,
+): string {
+  return `${sandboxProfile.replace(/^SME_/, "").toLowerCase()}-recovery-d${optimization.crunch_day}`;
 }
 
 export async function loadCopilotContext(
-  state: SmeFinancialState = apexFinancialState(),
+  state?: SmeFinancialState,
   smeProfileId: string = IN_MEMORY_PROFILE_ID,
+  sandboxProfile: SmeProfileId = DEFAULT_SME_PROFILE,
 ): Promise<CopilotContext> {
-  const forecast = await forecastCashFlow(state);
-  const optimization = await optimizeRecovery(state);
-  return { state, forecast, optimization, planId: recoveryPlanId(optimization), smeProfileId };
+  const resolved = state ?? smeFinancialState(sandboxProfile);
+  const forecast = await forecastCashFlow(resolved);
+  const optimization = await optimizeRecovery(resolved);
+  return {
+    state: resolved,
+    forecast,
+    optimization,
+    planId: recoveryPlanId(optimization, sandboxProfile),
+    smeProfileId,
+    sandboxProfile,
+  };
 }
 
 /**
@@ -105,6 +122,83 @@ export function attestationBundle(ctx: CopilotContext): unknown {
     forecast,
     optimization: ctx.optimization,
   };
+}
+
+// ------------------------------------------------------------- memo screening
+
+export interface ScreenedMemo {
+  invoice_id: string;
+  customer_name: string;
+  quarantined: boolean;
+  severity: "none" | "suspicious" | "critical";
+  matched_patterns: string[];
+  /** The exact substrings that fired, so the UI can mark them in the excerpt. */
+  matched_text: string[];
+  /** Newline-stripped and truncated. Safe for a human, never for a prompt. */
+  sanitized_excerpt: string;
+}
+
+/**
+ * Screen every invoice memo at read time, not only when a caller asks for the
+ * raw text. Quarantine is a property of the invoice from the moment it is
+ * ingested, so nothing downstream has to remember to ask for the check.
+ */
+export function screenInvoiceMemos(ctx: CopilotContext): ScreenedMemo[] {
+  return Object.entries(SME_PROFILES[ctx.sandboxProfile].memos).map(([invoiceId, memo]) => {
+    const scan = detectIndirectPromptInjection(memo);
+    return {
+      invoice_id: invoiceId,
+      customer_name: ctx.state.invoices_ar.find((i) => i.id === invoiceId)?.customer_name ?? invoiceId,
+      quarantined: scan.injectionDetected,
+      severity: scan.severity,
+      matched_patterns: scan.matches.map((m) => m.name),
+      matched_text: scan.matches.map((m) => m.matched),
+      sanitized_excerpt: scan.sanitizedMemo,
+    };
+  });
+}
+
+/**
+ * The exact object a Tier 2 tool acts on.
+ *
+ * The approval token commits to `digestPayload` of this, so the mint site and
+ * the execute site must build it identically or the token will not verify.
+ *
+ * Every variant carries an `amount`, and every amount is derived from the
+ * context rather than taken from the caller, so `confirmedAmount` — the figure
+ * the human physically typed — can be cross-checked against all three
+ * operations instead of only the financing draw.
+ */
+export function tier2Payload(
+  tool: string,
+  input: Record<string, unknown>,
+  ctx: CopilotContext,
+): unknown {
+  switch (tool) {
+    case "execute_recovery_plan":
+      return {
+        plan_id: String(input.plan_id ?? ctx.planId),
+        action_ids: ctx.optimization.optimal_plan.actions.map((a) => a.target_id),
+        // What executing the plan costs: the figure the approver is agreeing to spend.
+        amount: ctx.optimization.optimal_plan.total_cost,
+      };
+    case "send_supplier_deferral_email": {
+      const payableId = String(input.payable_id ?? "");
+      return {
+        payable_id: payableId,
+        plan_id: String(input.plan_id ?? ctx.planId),
+        amount: ctx.state.payables_ap.find((p) => p.id === payableId)?.amount ?? 0,
+      };
+    }
+    case "accept_financing_offer":
+      return {
+        financing_id: String(input.financing_id ?? ""),
+        amount: Number(input.amount ?? 0),
+        plan_id: String(input.plan_id ?? ctx.planId),
+      };
+    default:
+      return null;
+  }
 }
 
 // --------------------------------------------------------------- tool schemas
@@ -257,21 +351,25 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
 
   switch (tool) {
     case "read_sme_profile": {
-      // Memo text is third-party input. Passing it to the gate is the point:
-      // the planted memo escalates this read into TIER_3 and is denied.
-      if (input.include_memos === true) {
-        untrustedContext = Object.values(APEX_INVOICE_MEMOS).join("\n\n");
+      // Every memo is screened on this path, whether or not the caller asked
+      // for the raw text, so quarantine travels with the invoice. Asking for
+      // the raw text is the separate, poisoning act: that escalates to TIER_3.
+      const screened = screenInvoiceMemos(ctx);
+      const byInvoice = new Map(screened.map((m) => [m.invoice_id, m]));
+      const memos = SME_PROFILES[ctx.sandboxProfile].memos;
+      if (input.include_memos === true && Object.keys(memos).length) {
+        untrustedContext = Object.values(memos).join("\n\n");
       }
       payload = {
-        company_name: APEX_PROFILE.companyName,
+        company_name: ctx.state.company_name,
         current_cash: ctx.state.current_cash,
         minimum_safe_buffer: ctx.state.minimum_safe_buffer,
         credit_score: ctx.state.credit_score,
       };
       produce = () => ({
         profile: {
-          company_name: APEX_PROFILE.companyName,
-          industry: APEX_PROFILE.industry,
+          company_name: ctx.state.company_name,
+          industry: SME_PROFILES[ctx.sandboxProfile].industry,
           current_cash: ctx.state.current_cash,
           minimum_safe_buffer: ctx.state.minimum_safe_buffer,
           credit_score: ctx.state.credit_score,
@@ -279,8 +377,11 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
         },
         invoices_ar: ctx.state.invoices_ar.map((i) => ({
           ...i,
-          memo_present: i.id in APEX_INVOICE_MEMOS,
-          memo_quarantined: i.id in APEX_INVOICE_MEMOS,
+          memo_present: byInvoice.has(i.id),
+          // The screen's verdict, not the mere presence of a memo: a clean
+          // supplier note must not be quarantined alongside a poisoned one.
+          memo_quarantined: byInvoice.get(i.id)?.quarantined ?? false,
+          memo_matched_patterns: byInvoice.get(i.id)?.matched_patterns ?? [],
         })),
         payables_ap: ctx.state.payables_ap,
         financing_options: ctx.state.financing_options,
@@ -381,10 +482,7 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
     case "execute_recovery_plan": {
       // Structural arguments only, so this asserts the token check rather than
       // the numerical one.
-      payload = {
-        plan_id: String(input.plan_id ?? ctx.planId),
-        action_ids: o.optimal_plan.actions.map((a) => a.target_id),
-      };
+      payload = tier2Payload(tool, input, ctx);
       produce = () => ({
         executed_in_sandbox: true,
         plan_id: ctx.planId,
@@ -396,20 +494,13 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
     }
 
     case "send_supplier_deferral_email": {
-      payload = {
-        payable_id: String(input.payable_id ?? ""),
-        plan_id: String(input.plan_id ?? ctx.planId),
-      };
+      payload = tier2Payload(tool, input, ctx);
       produce = () => ({ sent_in_sandbox: true, payable_id: input.payable_id });
       break;
     }
 
     case "accept_financing_offer": {
-      payload = {
-        financing_id: String(input.financing_id ?? ""),
-        amount: Number(input.amount ?? 0),
-        plan_id: String(input.plan_id ?? ctx.planId),
-      };
+      payload = tier2Payload(tool, input, ctx);
       produce = () => ({
         drawn_in_sandbox: true,
         financing_id: input.financing_id,
@@ -461,6 +552,72 @@ export function synthesizeNarrative(ctx: CopilotContext): string {
   const rejected = o.matched_financing_options.filter((m) => !m.eligible);
   const engine =
     f.engine_source === "python-fastapi" ? "Python HiGHS MILP engine" : "deterministic TypeScript mirror";
+  const controls = [
+    `**Controls.**`,
+    `Nothing above has been executed. The plan actions are Tier 1 drafts; executing them is a Tier 2`,
+    `operation that needs a human HMAC approval token, and every call — allowed or denied — is appended to`,
+    `the SHA-256 audit chain.`,
+  ].join(" ");
+
+  // A healthy SME must not be handed a crisis briefing with every figure
+  // zeroed. The shortfall language below assumes a crunch day exists.
+  if (!f.shortfall_detected) {
+    return [
+      [
+        `**Liquidity verdict — ${f.company_name.replace(/\.$/, "")}: no action required.**`,
+        `Opening cash is ${money(ctx.state.current_cash)} against a`,
+        `${money(ctx.state.minimum_safe_buffer)} minimum safe buffer. Across`,
+        `${f.n_simulations.toLocaleString()} seeded Monte Carlo trajectories (seed ${f.seed}) the P10 cash line`,
+        `never breaks the buffer, ending the ${f.horizon_days}-day horizon at`,
+        `${money(plan.post_recovery_p10_balance)} with a ${pct(f.shortfall_probability)} probability of a breach`,
+        `at any point. Receivables are staggered against outflows (DSO`,
+        `${f.working_capital_metrics.days_sales_outstanding} days vs DPO`,
+        `${f.working_capital_metrics.days_payable_outstanding} days).`,
+      ].join(" "),
+      [
+        `**Recommended plan — ${money(plan.total_cost)}.**`,
+        `The optimiser returns the idle plan. Every lever it could pull — an early-payment discount, a`,
+        `supplier deferral, a bridge draw — is pure cost against a gap that does not exist.`,
+      ].join(" "),
+      controls,
+    ].join("\n\n");
+  }
+
+  // Infeasible is a different recommendation, not a cheaper one. Saying "here
+  // is your plan" over a gap no lever set closes is the failure mode that
+  // sells an SME a 59% APR advance on the way down.
+  if (!plan.feasible) {
+    const eligible = o.matched_financing_options.filter((m) => m.eligible);
+    return [
+      [
+        `**Liquidity verdict — ${f.company_name.replace(/\.$/, "")}: structurally short.**`,
+        `Opening cash is ${money(ctx.state.current_cash)} against a`,
+        `${money(ctx.state.minimum_safe_buffer)} minimum safe buffer. The P10 cash line breaks on day`,
+        `${o.crunch_day} at ${money(crunchP10)} — a ${money(o.required_cash)} hole — and`,
+        `${pct(f.shortfall_probability)} of ${f.n_simulations.toLocaleString()} trajectories breach the buffer.`,
+      ].join(" "),
+      [
+        `**No feasible recovery plan.** Solver status: ${o.solver_status}. The facilities that clear screening are:`,
+        ...eligible.map(
+          (m) =>
+            `- ${m.provider}: up to ${money(m.max_available)} in ${m.funding_days} days, ${pct(
+              m.effective_apr,
+            )} effective APR.`,
+        ),
+      ].join("\n"),
+      [
+        `Drawing every one of them to the ceiling still leaves the day-${o.crunch_day} gap open, so a draw buys`,
+        `days and adds a creditor. Doing nothing costs ${money(o.baseline_do_nothing_plan.total_cost)} in late fees`,
+        `and default penalties${
+          o.baseline_do_nothing_plan.breaches_statutory_payroll
+            ? " and leaves payroll unpaid, which is a statutory breach, not a priced trade-off"
+            : ""
+        }.`,
+        `The recommendation is escalation — a bank workout or an equity injection — not more debt.`,
+      ].join(" "),
+      controls,
+    ].join("\n\n");
+  }
 
   const paragraphs = [
     [

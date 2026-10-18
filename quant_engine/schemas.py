@@ -47,6 +47,10 @@ class ApPayable(_Model):
     late_fee_pct: float = Field(default=0.0, ge=0, le=1, description="Penalty if simply missed (do-nothing baseline)")
     is_critical: bool = Field(default=False, description="Payroll/tax: missing it triggers default_penalty")
     default_penalty: float = Field(default=0.0, ge=0)
+    is_payroll: bool = Field(
+        default=False,
+        description="Wages. Missing it is a statutory breach, not a late fee -- declared, never inferred from the name",
+    )
 
 
 class FinancingOption(_Model):
@@ -76,6 +80,18 @@ class SmeFinancialStateInput(_Model):
     horizon_days: int = Field(default=HORIZON_DAYS, ge=7, le=HORIZON_DAYS)
     max_relationship_risk: float = Field(default=1.0, ge=0, description="Total relationship_risk the owner will spend")
     relationship_risk_price: float = Field(default=2_000.0, ge=0, description="$ the owner implicitly pays to avoid 1.0 of risk")
+    gross_margin: float = Field(
+        default=0.35,
+        ge=0,
+        lt=1,
+        description="Gross margin. DPO is AP over daily COGS, not daily revenue, so this is required to state it",
+    )
+    correlation_rho: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=0.95,
+        description="Systemic correlation between customer payment delays. 0 keeps every invoice independent",
+    )
 
 
 # -------------------------------------------------------------------------- output
@@ -99,6 +115,14 @@ class ForecastResultOutput(_Model):
     p90_trajectory: list[float]
     shortfall_detected: bool
     first_shortfall_day: int | None
+    decision_day: int | None = Field(
+        default=None,
+        description="Last day the full lever set is still open: 72h before the crunch, when the payroll file locks",
+    )
+    p10_ci_95: list[float] = Field(
+        default_factory=lambda: [0.0, 0.0],
+        description="Distribution-free 95% confidence interval on the crunch-day P10 estimate",
+    )
     p10_shortfall_amount: float
     p50_shortfall_amount: float
     shortfall_probability: float
@@ -127,6 +151,10 @@ class RecoveryPlan(_Model):
     total_cost: float
     post_recovery_p10_balance: float
     meets_buffer: bool
+    feasible: bool = Field(default=True, description="False when no admissible combination of levers closes the gap")
+    breaches_statutory_payroll: bool = Field(
+        default=False, description="A payroll run goes unpaid on its due date: a statutory breach, not a trade-off"
+    )
     notes: str = ""
 
 

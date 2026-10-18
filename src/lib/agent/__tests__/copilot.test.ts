@@ -15,10 +15,12 @@ import {
   COPILOT_TOOLS,
   loadCopilotContext,
   runCopilotTool,
+  screenInvoiceMemos,
   synthesizeNarrative,
+  tier2Payload,
   type CopilotContext,
 } from "../vantora-copilot";
-import { verifyChain } from "../../sandbox/execution-logger";
+import { GENESIS_HASH, readChain, verifyChain } from "../../sandbox/execution-logger";
 import {
   classifyOperation,
   issueApprovalToken,
@@ -162,6 +164,7 @@ describe("every tool runs through the permission gate", () => {
         operation: "execute_recovery_plan",
         planId: ctx.planId,
         actorId: "cfo@apex",
+        payload: tier2Payload("execute_recovery_plan", { plan_id: ctx.planId }, ctx),
       }),
     });
     expect(run.ok).toBe(true);
@@ -191,6 +194,25 @@ describe("every tool runs through the permission gate", () => {
     expect(JSON.stringify(run.output)).toContain("memo_quarantined");
   });
 
+  it("screens memos on the default read path, quarantining only the poisoned one", async () => {
+    const run = await runCopilotTool({ tool: "read_sme_profile", input: {}, ctx });
+    const invoices = (run.output as { invoices_ar: { id: string; memo_quarantined: boolean }[] })
+      .invoices_ar;
+    const quarantined = invoices.filter((i) => i.memo_quarantined).map((i) => i.id);
+    // INV-2005 carries the injection; INV-2002's memo is ordinary boilerplate.
+    expect(quarantined).toEqual(["INV-2005"]);
+  });
+
+  it("records the matched patterns against the invoice at ingestion", () => {
+    const screened = screenInvoiceMemos(ctx);
+    const poisoned = screened.find((m) => m.invoice_id === "INV-2005")!;
+    const clean = screened.find((m) => m.invoice_id === "INV-2002")!;
+    expect(poisoned.quarantined).toBe(true);
+    expect(poisoned.matched_patterns).toContain("wire_to_external_account");
+    expect(clean.quarantined).toBe(false);
+    expect(clean.matched_patterns).toEqual([]);
+  });
+
   it("fails closed on an unregistered tool", async () => {
     const run = await runCopilotTool({ tool: "liquidate_everything", input: {}, ctx });
     expect(run.gate.tier).toBe("TIER_2_HITL_APPROVAL");
@@ -210,8 +232,13 @@ describe("askCopilot", () => {
 
 describe("audit chain", () => {
   it("still verifies after everything above was logged", () => {
-    const verification = verifyChain();
+    const chain = readChain();
+    const verification = verifyChain(chain);
     expect(verification.valid).toBe(true);
-    expect(verification.length).toBeGreaterThanOrEqual(12);
+    expect(chain[0].prevLogHash).toBe(GENESIS_HASH);
+    // This suite's own gate calls. It may run before or after the security
+    // suite, so the floor is what it contributes alone — never a total that
+    // depends on another file (or a stale log) having run first.
+    expect(verification.length).toBeGreaterThanOrEqual(10);
   });
 });
