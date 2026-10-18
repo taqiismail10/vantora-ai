@@ -1,0 +1,8 @@
+fastapi[standard]>=0.120
+httpx2>=0.1
+highspy>=1.11
+numpy>=2.3
+pulp>=4.0
+pydantic>=2.11
+pytest>=8.4
+scipy>=1.16
