@@ -290,7 +290,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                       after && "opacity-40",
                     )}
                   >
-                    <TableCell className="font-mono tabular-nums text-slate-400">
+                    <TableCell className="font-mono tabular-nums text-slate-500">
                       {/* The hash-chain rail: a continuous link from genesis down,
                           snapping at the first entry that no longer recomputes. */}
                       <span className="flex items-center gap-1.5">
@@ -316,7 +316,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                                 after
                                   ? "text-rose-400"
                                   : walked || verification.valid
-                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    ? "text-emerald-700 dark:text-emerald-400"
                                     : "text-slate-300 dark:text-slate-600",
                               )}
                             />
@@ -356,9 +356,9 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                         </div>
                       ) : null}
                     </TableCell>
-                    <TableCell className="font-mono text-[10px] text-slate-400">
+                    <TableCell className="font-mono text-[10px] text-slate-500">
                       {entry.prevLogHash === GENESIS ? (
-                        <span className="text-emerald-600 dark:text-emerald-400">genesis</span>
+                        <span className="text-emerald-700 dark:text-emerald-400">genesis</span>
                       ) : (
                         <>…{entry.prevLogHash.slice(-6)}</>
                       )}

@@ -2,15 +2,18 @@
 
 **An SME finance copilot that is allowed to reason, but never allowed to invent a number or move money on its own.**
 
-Vantora AI detects a small manufacturer's liquidity collision fourteen days before it lands, prices every way out of it with a Mixed-Integer Linear Program, and then refuses to act on any of it without a cryptographically signed human approval — logging every decision, allowed or denied, to a tamper-evident SHA-256 chain.
+Vantora AI detects a small manufacturer's liquidity collision fourteen days before it lands, prices every way out of it with a Mixed-Integer Linear Program, and then refuses to act on any of it until the signed-in business owner approves that exact action — logging every decision, allowed or denied, to a tamper-evident SHA-256 chain.
+
+> **Synthetic sandbox.** Smart Jeans Manufacturing Ltd. and its ledger are invented. Buyer, supplier, lender and insurer names (Zara, Kenneth Cole, Atradius, Coface, …) are used illustratively; no affiliation with, or data from, any real company is implied. Nothing in this repository moves real money or contacts a real counterparty.
 
 | | |
 |---|---|
 | **Track** | FinTechathon Topic E — SME Finance Copilot ("AI as a Financial Participant") |
-| **Tests** | **115 passing** — 82 Vitest + 33 pytest (with the Python engine stopped, 2 of the Vitest cases are live-bridge tests that skip themselves: `80 passed, 2 skipped`) |
-| **Stack** | Next.js 16 (App Router, TS) · FastAPI · NumPy/SciPy · PuLP + HiGHS · Prisma 7 / Supabase · Recharts · shadcn/ui |
+| **Tests** | **220 passing** — 186 Vitest + 34 pytest (2 of the Vitest cases compare against the live Python engine and skip when it is down) |
+| **Stack** | Next.js 16 (App Router, TS) · Better Auth (SQLite via `node:sqlite`) · Google Gemini (`@google/genai`) or OpenRouter (chat completions) · FastAPI · NumPy/SciPy · PuLP + HiGHS · Recharts · shadcn/ui |
+| **Access** | Email + password sign-in; roles OWNER / ANALYST / VIEWER provisioned by the owner. No public sign-up |
 | **License** | MIT |
-| **Runs with zero configuration** | No database, no API key, no Python process required |
+| **Minimum configuration** | Two secrets (`BETTER_AUTH_SECRET`, `HITL_SIGNING_SECRET`) and one owner account. No cloud database, no model key and no Python process required |
 
 ---
 
@@ -28,42 +31,85 @@ Vantora's answer is structural rather than behavioural: **the model never comput
 | Rubric dimension | Where it is implemented | Evidence |
 |---|---|---|
 | **Task completion — 40%**<br/>Cash-flow management & alerts, business financial analysis, financing matching | Seeded 1,000-path Monte Carlo CFaR (`quant_engine/forecaster.py`), MILP recovery optimiser (`optimizer.py`), deterministic multi-screen financing ranker (`financing_ranker.py`) | Day-14 crunch detected, **$74,700** gap closed for **$1,368.88**, 4 facilities screened with exact rejection reasons |
-| **Security & compliance — 30%** | 4-tier permission gate, HMAC HITL approval tokens, numerical attestation, indirect-prompt-injection screen, SHA-256 hash-chained audit ledger (`src/lib/security/`, `src/lib/sandbox/`) | 5-attack red-team drill runnable live from the dashboard; 17 genesis-linked workflow entries in `logs/sandbox_operation_logs.jsonl`; 44 security tests |
-| **Innovation & interaction — 30%** | Dual-plane architecture with a deterministic TypeScript mirror; counterfactual proof UI; typed-amount approval modal; copilot answers carry a `Numerical Integrity: Attested` badge | 4-tab institutional dashboard, Tier-1 draft preview modals, live ledger viewer with chain verification |
+| **Security & compliance — 30%** | Authenticated sessions and server-side roles (`src/lib/server/identity.ts`); approvals stored as single-use database rows bound to the approver, business, scenario, plan version and canonical payload (`approvals.ts`); server-side validation of every financial action against the current plan and financing screen; 4-tier gate, numerical attestation, injection screen, SHA-256 hash chain | `src/lib/server/__tests__/authorization.test.ts` (route-level, real sessions); 24-entry evidence chain from a real session in `docs/evidence/`; 5-attack red-team drill |
+| **Innovation & interaction — 30%** | Position-aware replanning (in-flight actions are forecast effects, not cash; a decline re-solves); counterparty-refusal re-solves; expiring-lever cost curve; typed confirmation of each action's real financial effect; copilot answers labelled with their actual source | 4-workspace dashboard with progress rail, execution lifecycle and simulated counterparty responses |
 
 ---
 
 ## 2. Quick start
 
 ```bash
-npm install
-npm run dev          # http://localhost:3000 — works immediately, TS mirror + in-memory data
+npm install                                  # .npmrc sets legacy-peer-deps (Better Auth's optional SvelteKit peer)
+
+cp .env.example .env
+# set BETTER_AUTH_SECRET and HITL_SIGNING_SECRET, 32+ random characters each:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+
+# create the first account (prints a one-time password; there is no sign-up page)
+npm run users -- bootstrap-owner --email owner@example.com --name "Plant Owner"
+npm run users -- add --email analyst@example.com --name "Analyst" --role ANALYST   # optional
+npm run users -- add --email viewer@example.com --name "Viewer" --role VIEWER       # optional
+
+npm run dev                                  # http://localhost:3000 → sign in
 ```
 
-For the full experience with the Python solver serving the numbers:
+For the Python solver serving the numbers (otherwise the seeded TypeScript mirror does, and says so):
 
 ```bash
-# one-time: create the engine venv and install its dependencies
 python -m venv quant_engine/.venv
 quant_engine/.venv/Scripts/python.exe -m pip install -r quant_engine/requirements.txt   # .venv/bin/ on POSIX
-
 npm run dev:all      # Next.js + uvicorn together
 ```
 
-The status bar tells you which plane is serving: **`Python HiGHS MILP Engine: Connected`** or **`Deterministic TS Mirror: Active`**. Both produce the same day-14 crunch and the same $74,700 gap — a cross-check the test suite asserts.
+For the AI copilot, pick a provider with `AI_PROVIDER` and set that provider's key; see **Switching the AI provider** below. Without a working provider the copilot answers from the deterministic synthesiser and every answer is labelled as such.
+
+### Switching the AI provider
+
+Edit `.env` and restart the server (`npm run dev:all`, or your `next start` process). Both keys may stay in `.env`; only the selected provider's settings are read and validated.
+
+```bash
+# Google Gemini (the default when AI_PROVIDER is unset)
+AI_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.1-flash-lite
+
+# OpenRouter
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=z-ai/glm-5.3-flash          # any OpenRouter model with tool calling
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+The header chip shows the configured provider and model, and each answer is labelled with what produced it: `Gemini · <model>`, `OpenRouter · <model>`, or `Deterministic fallback` with the reason. A failed provider is never replaced by the other one. An `OPENROUTER_MODEL` without tool-calling support is reported as `model_incompatible`, and an unsupported `AI_PROVIDER` value as `invalid_configuration`.
+
+**Roles.** OWNER: read, analyse, draft, approve and execute sandbox actions, record simulated counterparty responses. ANALYST: read, analyse, draft. VIEWER: read the dashboard and the audit chain. The copilot is a separate service identity that can never approve; it can submit an action only if the owner delegated that exact action to it.
+
+**Account management** (`npm run users -- …`): `list`, `set-role --email … --role …` (ends the user's sessions), `revoke --email …` (removes access and sessions). The last OWNER cannot be demoted or revoked.
 
 ### Verifying the claims
 
 ```bash
-npx vitest run                                                   # 82 tests
-quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -v   # 33 tests
-npm run lint && npx tsc --noEmit                                 # clean
-npm run build                                                    # production build
+npx vitest run                                                          # 186 tests (2 need the Python engine)
+quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -q   # 34 tests
+npm run lint && npx tsc --noEmit && npm run build                       # clean
+npm run benchmark       # MILP vs greedy on all 216 scenario combinations (needs `npm run quant`)
+npm run verify-evidence -- docs/evidence/session-2026-10-19/sandbox_operation_logs.jsonl
 ```
 
-The 82 Vitest cases split as **44 security / audit-chain · 20 copilot orchestration · 18 engine, domain and stress-control**. Two of those compare the Python engine against the TypeScript mirror directly, so they skip when FastAPI is not running — start it (`npm run quant`) to see all 82 execute. 115 tests in total.
+Tests never touch the application audit chain, the app database or the frozen evidence: they run against a temporary log and an in-memory database, and `vitest.global-setup.ts` fails the run if `logs/` or `docs/evidence/` changes.
 
-The Prisma client is imported through a runtime string so `tsc`, Vitest and `next build` do not require `prisma generate` to have been run. The final production build completes without warnings.
+### Submission contents
+
+| Checklist item | Where |
+|---|---|
+| 01 Technical documentation | `docs/01_Technical_Documentation.pdf` (source `.md` alongside) |
+| 02 Presentation deck | `docs/02_Presentation_Deck.pdf` |
+| 03 Demo video | recorded by the team — script in `docs/VANTORA_IMPLEMENTATION_STATUS.md` §8 |
+| 04 Source code | this repository: README, run instructions above, tests under `src/**/__tests__` and `quant_engine/tests` |
+| 05 Security self-assessment | `docs/05_Security_Self_Assessment_Report.pdf` |
+| 06 Execution evidence | `docs/evidence/session-2026-10-19/` (hash-chained log + screenshots + how it was produced) |
+
+`docs/` is git-ignored by the team's choice; the deliverables are uploaded to the competition portal and attached to the GitHub release.
 
 ---
 
@@ -76,15 +122,17 @@ flowchart TB
     subgraph UI["Interaction plane — Next.js 16 App Router"]
         D["Dashboard (4 tabs)<br/>Liquidity radar · Optimizer · Action center · Ledger"]
         R1["GET /api/state"]
-        R2["POST /api/action<br/>draft · approve · execute · red_team · verify_chain"]
+        R2["POST /api/action<br/>draft · approve · execute · simulate · red_team · verify_chain"]
         R3["POST /api/copilot"]
     end
 
     subgraph AI["AI orchestration plane — may explain, may not compute"]
-        C["vantora-copilot.ts<br/>9 gated tools · Anthropic tool-use loop<br/>or deterministic synthesiser"]
+        C["vantora-copilot.ts + llm.ts<br/>gated tools · Gemini or OpenRouter tool loop<br/>or deterministic synthesiser"]
     end
 
     subgraph SEC["Security kernel — deterministic, fail-closed"]
+        ID["identity.ts<br/>Better Auth session → server-side role"]
+        AP["approvals.ts<br/>DB-bound approval · atomic execution"]
         G["permission-gate.ts<br/>① injection screen → ② Tier 3 block<br/>③ numerical attestation → ④ HMAC token"]
         L["execution-logger.ts<br/>SHA-256 hash chain"]
     end
@@ -97,11 +145,16 @@ flowchart TB
     end
 
     subgraph DATA["Persistence"]
-        P[("Supabase / Prisma 7")]
+        P[("Supabase / Prisma 7 (optional ledger)")]
+        SQ[("data/vantora.db — SQLite<br/>users · sessions · roles · approvals · executions")]
         J["logs/sandbox_operation_logs.jsonl"]
     end
 
     D --> R1 & R2 & R3
+    R2 & R3 --> ID
+    ID --> AP
+    AP --> G
+    AP --> SQ
     R3 --> C
     R2 --> C
     C -->|"every tool call"| G
@@ -118,7 +171,7 @@ flowchart TB
     classDef sec fill:#fff7ed,stroke:#d97706,color:#7c2d12
     classDef ai fill:#eff6ff,stroke:#1d4ed8,color:#1e3a8a
     class F,O,FR,M quant
-    class G,L sec
+    class G,L,ID,AP sec
     class C ai
 ```
 
@@ -140,7 +193,7 @@ Checks run most-severe-first, and *every* path — allow or deny — writes an a
 
 ### Plane 4 — AI orchestration (`src/lib/agent/vantora-copilot.ts`)
 
-Nine tools, all routed through the gate. With `ANTHROPIC_API_KEY` set, a real Anthropic tool-use loop; without it, a deterministic narrative synthesiser. Both are held to the same standard: the answer is only returned after `verifyNumericalIntegrity` clears every dollar figure and percentage in it.
+Ten tools, all routed through the gate. With a provider configured, one shared bounded tool loop (`src/lib/agent/llm.ts`) drives a Gemini (`gemini.ts`) or OpenRouter (`openrouter.ts`) adapter. Each adapter keeps its provider's conversation state verbatim and matches every tool result to its call id. Arguments are schema-checked, unknown tools are refused, the loop stops after five model turns, and each request has a 20 s timeout. Only failed *model requests* are retried (429/5xx/network, at most twice); a tool never runs twice because of a retry. Without a key, or when the provider fails, the deterministic synthesiser answers and the UI says why. Either way the answer is only returned after `verifyNumericalIntegrity` clears every dollar figure and percentage in it. Model-requested Tier 2 tools run only through the approval service on an owner delegation for that exact action.
 
 ---
 
@@ -174,7 +227,7 @@ The four dials — **buyer delay shift** (+0/7/14/21d), **plant shift scale** (1
 | **Required buffer gap** | **$74,700** |
 | Shortfall probability | **100.0%** on the canonical seed |
 
-This is a *collision*, not a slow bleed: two critical obligations land on the same day while the receivables that would cover them are still in transit. On day 14 the P10, P50 and P90 lines coincide at −$49,700 — no simulated trajectory delivers a receivable in time, which is why the probability is 100.0% rather than merely high.
+This is a *collision*, not a slow bleed: two critical obligations land on the same day while the receivables that would cover them are still in transit. On day 14 the P10, P50 and P90 lines coincide at −$49,700. In the seeded 1,000-run simulation, 947 runs end day 14 at exactly −$49,700. 37 runs (3.7%) see Zara or Kenneth Cole pay early enough, which lifts the balance to −$6,700 or +$2,300. 16 runs (1.6%) see a small early invoice slip, which takes it down to −$75,700 or −$83,700. No run reaches the $25,000 buffer, so the probability is 100.0% *within the model*. Because each tail is under 10% of runs, P10, P50 and P90 all read −$49,700. The uncertainty is real, but it sits on days 3–8 (the small invoices) and days 17–30 (the large ones; the P90−P10 band peaks at $126,000 on day 26). The delay distributions are authored assumptions, and payables and the absence of new sales are fixed. This is certainty inside the model, not a guarantee about real buyers.
 
 > **Two datasets, two probabilities — both real.** The dashboard and the Vitest suite run the canonical 1B seed above (**$52,000** cash → **$74,700** gap → **100.0%**). The pytest suite exercises a second, deliberately more stochastic fixture in `quant_engine/tests/conftest.py` (**$48,000** cash, **$58,000** gap) whose shortfall probability is **98.2%** — a case where a small minority of trajectories survive. Keeping both prevents the forecaster from being tuned to one convenient shape.
 
@@ -188,7 +241,9 @@ The optimiser does not just recommend; it prices the alternatives and shows its 
 | Naive borrowing | $5,812.27 | The entire $74,700 from QuickFloat @ **46% APR** (94.7% effective, 30-day) | $25,000 | ✅ restored |
 | Do nothing | $31,963.00 | Payroll missed ($19,360) + Vulcan partially missed ($12,603) — late fees plus both default penalties | −$49,700 | ❌ breached |
 
-**Savings: $4,443.39 vs naive borrowing, $30,594.12 vs inaction.** The optimal plan uses all three lever families and consumes 0.25 of the 0.40 relationship-risk budget. Solver status: `Optimal`.
+**What the $1,368.88 is.** It is the solver's objective: **$868.88 of cash** (fees, discounts, interest) plus a **$500 modelled relationship-risk charge** on the Midland deferral (`0.25 × $2,000`), which is not money leaving the account. On that same objective the mix is $4,443.39 cheaper than borrowing everything from QuickFloat. The do-nothing row is not a priced alternative: its penalty sizes are scenario assumptions, and it breaches statutory payroll. The plan consumes 0.25 of the 0.40 relationship-risk budget. Solver status: `Optimal`.
+
+**MILP versus a greedy heuristic, measured.** `npm run benchmark` runs all 216 preset × stress-dial combinations through both the HiGHS MILP and a greedy cost-per-dollar heuristic. Result (`src/lib/benchmark-results.json`): **identical cost in 144 of 144 feasible cases, agreement on all 72 infeasible ones, zero cases where the MILP is cheaper.** On this data the MILP does not find better plans; it proves the plan is optimal and is where the hard constraints live.
 
 The insight the MILP encodes is one a spreadsheet misses: *borrowing is the most expensive correct answer*. Working-capital timing levers are nearly free compared with 46% APR emergency capital, and the solver reaches for debt only for the $2,345 residual the free levers cannot cover.
 
@@ -225,7 +280,7 @@ Heritage SBA is the cheapest capital on the board and is still correctly refused
 |---|---|---|
 | `TIER_0_AUTO_READ` | Read-only analysis, runs unattended | `read_sme_profile`, `run_cash_flow_forecast`, `run_recovery_optimization`, `rank_financing_options` |
 | `TIER_1_DRAFT_ONLY` | May produce a draft, never a side effect | `draft_customer_discount_offer`, `draft_supplier_deferral_email`, `draft_recovery_plan_summary`, `issue_hitl_approval_token` |
-| `TIER_2_HITL_APPROVAL` | Requires a valid HMAC token minted by a human for that exact plan | `execute_recovery_plan`, `send_supplier_deferral_email`, `accept_financing_offer`, `issue_early_payment_discount` |
+| `TIER_2_HITL_APPROVAL` | Runs only on an approval the signed-in OWNER minted for that exact action, scenario and plan version | `execute_recovery_plan`, `send_supplier_deferral_email`, `accept_financing_offer`, `issue_early_payment_discount` |
 | `TIER_3_PROHIBITED` | Never permitted, by any caller, with any token | `wire_funds_to_external_account`, `change_supplier_bank_details`, `disable_audit_logging`, `bypass_human_approval`, `exfiltrate_financial_records` |
 
 **Fail-closed everywhere.** An unregistered operation defaults to Tier 2. A missing `HITL_SIGNING_SECRET` denies Tier 2 rather than minting an untrusted token. Untrusted text carrying injected instructions escalates its operation *into* Tier 3.
@@ -255,7 +310,15 @@ currentLogHash = SHA256(seq │ timestamp │ actorType │ actorId │ operatio
 
 Genesis is 64 zeros; each entry commits to its predecessor. Editing, deleting or reordering any row breaks every hash after it, which `verifyChain()` reports with the exact `brokenAtSeq`. **Payloads are stored only as SHA-256 digests**, so no account number or dollar figure is ever written to the log — asserted by a test that greps the serialised entry for `998877`. The chain is written to `logs/sandbox_operation_logs.jsonl` (authoritative) and best-effort mirrored to the Prisma `AuditLog` table, so a database outage cannot drop the audit trail.
 
-### 5.5 The red-team drill
+### 5.5 Who can approve, and what an approval is
+
+- **Identity** comes only from a Better Auth session cookie (scrypt password hashes, 8-hour sessions, sign-out and revocation delete the session row). **Role and business** come only from the server's `membership` table, re-read on every request. A request body carrying `actorId`, `role`, `businessId` or similar is refused with 400.
+- **Approve** (OWNER only) re-derives the plan for the exact scenario the browser is showing, re-validates the action (facility exists and passed screening, amount within its limit, payable flexible and in the plan, invoice clean and discountable, plan feasible), and requires the owner to type the figure that matters for *that* action — the discount given up, the bill being moved, the principal drawn, or the plan's cash cost — compared in integer cents. The approval is a database row bound to the approver, business, scenario, plan version and a digest of the canonical payload; it expires in 5 minutes and works once.
+- **Execute** re-derives the plan again, re-validates, and then in one synchronous SQLite transaction burns the approval and inserts the execution row whose primary key is the real-world action. A replay, a concurrent duplicate, a different owner's approval, an expired one, a changed plan, a changed scenario, or the same action reached through the full-plan and single-action paths all fail there.
+- **Lifecycle.** Submitted actions are `AWAITING_COUNTERPARTY` and count only as *forecast* effects; cash moves only on `SETTLED`. Settlement is recorded once per action (a unique index backs the state machine). It updates the sandbox account: cash, the receivable it clears, the discount given up and the facility balance now owed. Pending inflows are listed separately and are never counted as cash. Counterparty responses are recorded with clearly labelled sandbox simulation controls; a decline re-solves the plan and revokes every outstanding approval in that scenario.
+- **Refusals are evidence.** A refused approve/execute by an authenticated owner — e.g. a draw from the lender the screen rejected — is written to the audit chain.
+
+### 5.6 The red-team drill
 
 **Run red-team security drill** in the dashboard executes five live attacks plus one control, appending every result to the chain:
 
@@ -272,11 +335,11 @@ Genesis is 64 zeros; each entry commits to its predecessor. Editing, deleting or
 
 ## 6. The dashboard
 
-Four tabs, institutional styling, `tabular-nums` throughout, semantic colour only (emerald = healthy/verified, amber = warning/awaiting human, rose = shortfall/blocked).
+Four tabs under a verdict bar (how short — to zero and to the buffer; decide-by date and the cost of waiting; cash cost vs modelled risk) and a progress rail (understand → choose → approve → track). Semantic colour only, never colour alone; the chart has a table view; reduced-motion is honoured; all four tabs fit at 360 px.
 
 1. **Liquidity radar** — four KPI cards; a 30-day Recharts fan chart with the P10–P90 band, the $25,000 buffer threshold, the day-14 collision marker annotated with both payables, and a toggleable post-recovery P10 overlay; AR and AP tables showing reliability scores, delay distributions, P90 arrival days, deferral windows and the per-memo injection screen result.
 2. **Recovery optimizer** — the three counterfactual cards, each carrying the four mandated elements (deterministic-calculation badge, expected cost in $ *and* APR-equivalent, risk score, permission-tier badge); the financing eligibility matrix; the solver's own proof summary.
-3. **Copilot action center** — the attested narrative and a Q&A panel, each answer badged `Numerical Integrity: Attested`; staged Tier-1 drafts with preview modals; and a **Review & approve** dialog for each Tier-2 operation, requiring the exact amount before signing a single-use HMAC token. The red-team drill demonstrates refusal of unapproved execution.
+3. **Copilot action center** — the attested narrative and a Q&A panel, each answer labelled `Gemini · <model>` or `Deterministic fallback` with the reason; staged Tier-1 drafts with preview modals (including the illustrative buyer-portal preview); and the **execution queue**: one row per real-world action with its lifecycle status and history, a per-action and a whole-plan **Review & approve** dialog, and sandbox controls to simulate a counterparty accepting, declining, failing or settling.
 4. **Security & ledger** — a live viewer over `logs/sandbox_operation_logs.jsonl` with tier/decision filters, expandable hash details, a **Verify SHA-256 chain integrity** button and a `.jsonl` export.
 
 ---
@@ -290,7 +353,7 @@ quant_engine/                  Python quantitative engine
   optimizer.py                 MILP (PuLP + HiGHS) + counterfactuals
   financing_ranker.py          deterministic eligibility screen
   main.py                      FastAPI: /api/quant/{forecast,optimize}, /health
-  tests/                       33 pytest tests
+  tests/                       34 pytest tests
 
 src/
   app/
@@ -300,36 +363,47 @@ src/
   lib/
     quant-client.ts            engine bridge + deterministic TS mirror
     dashboard-data.ts          single payload builder (server + route)
-    agent/vantora-copilot.ts   9 gated tools, copilot loop, synthesiser
+    agent/vantora-copilot.ts   10 gated tools, deterministic synthesiser
     security/permission-gate.ts  tiers, HMAC, attestation, injection screen
     sandbox/execution-logger.ts  SHA-256 hash chain
     sandbox/seed-data.ts       Smart Jeans dataset + 3 scenario presets
     stress-controls.ts         the 4 live dials (client-safe: no node: imports)
+    server/auth.ts             Better Auth config (no public sign-up)
+    server/identity.ts         session → role/business, capabilities, CSRF/origin check
+    server/plan.ts             scenario parsing, plan version, sandbox position, action specs, validation
+    server/approvals.ts        DB-bound approvals, atomic execution, counterparty simulation
+    server/agent-tools.ts      what a model-requested tool may do
+    agent/llm.ts, providers.ts shared tool loop and provider selection
+    agent/gemini.ts, openrouter.ts  provider adapters
+    agent/ask.ts               fallback and attestation
+scripts/
+  users.ts                     owner-run account provisioning
+  benchmark-milp-vs-greedy.ts  the 216-scenario solver benchmark
+  verify-evidence.ts           re-verify any frozen chain
 
-prisma/schema.prisma           6 models, 5 enums
-docs/                          technical documentation, security assessment  (git-ignored)
-logs/                          the hash-chained audit ledger  (generated by a run; git-ignored)
+prisma/schema.prisma           optional ledger tables
+data/                          app SQLite database (git-ignored; never commit)
+docs/                          deliverables + frozen evidence (git-ignored; uploaded with the submission)
+logs/                          application audit chain (git-ignored)
 ```
-
-`docs/` and `logs/` are deliberately kept out of version control: the ledger is
-evidence produced by a run (recreate it with `npx vitest run` or by using the
-app), and the documentation deliverables are distributed alongside the
-submission rather than from the repository.
 
 ---
 
 ## 8. Configuration
 
-Every variable is optional — see [`.env.example`](.env.example) for the full template.
+See [`.env.example`](.env.example).
 
-| Variable | Unset behaviour |
-|---|---|
-| `DATABASE_URL` / `DIRECT_URL` | In-memory canonical dataset (`mode: "in-memory"`) |
-| `QUANT_ENGINE_URL` | Defaults to `http://127.0.0.1:8000`; unreachable → TypeScript mirror |
-| `ANTHROPIC_API_KEY` | Deterministic narrative synthesiser |
-| `HITL_SIGNING_SECRET` | All Tier 2 operations denied (fail-closed) |
-
-With a database configured, `npm run db:push` runs `prisma db push && prisma generate`. Prisma 7 reads the connection URL from `prisma.config.ts`, not from the `datasource` block.
+| Variable | Required? | Unset behaviour |
+|---|---|---|
+| `BETTER_AUTH_SECRET` | **yes** | every page and API answers "authentication is not configured"; there is no anonymous mode |
+| `BETTER_AUTH_URL` | for non-localhost | origin for cookies and the cross-origin check; defaults to `http://localhost:3000` |
+| `HITL_SIGNING_SECRET` | **yes**, to approve | Tier 2 operations fail closed |
+| `AI_PROVIDER` | no | `gemini`; any other value than `gemini`/`openrouter` is a configuration error (fallback answers) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | when `AI_PROVIDER=gemini` | deterministic synthesiser, labelled as a fallback |
+| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_BASE_URL` | when `AI_PROVIDER=openrouter` | deterministic synthesiser, labelled as a fallback |
+| `QUANT_ENGINE_URL` | no | defaults to `http://127.0.0.1:8000`; unreachable → TypeScript mirror |
+| `VANTORA_DB_PATH` / `VANTORA_AUDIT_LOG` | no | `data/vantora.db` / `logs/sandbox_operation_logs.jsonl` |
+| `DATABASE_URL` / `DIRECT_URL` | no | in-memory synthetic ledger (accounts and approvals always use the SQLite file) |
 
 ---
 
@@ -337,10 +411,13 @@ With a database configured, `npm run db:push` runs `prisma db push && prisma gen
 
 Stated plainly, because a security project that hides its own caveats has missed the point.
 
-- **The TypeScript mirror is an approximation, not a second solver.** It uses a greedy cost-per-dollar heuristic and clamps delays at zero rather than re-sampling like `scipy.stats.truncnorm`. It reproduces the MILP optimum on the canonical dataset and is tested never to *claim* a better result than the true optimum, but Python is authoritative whenever it is reachable.
-- **The post-recovery trajectory overlay is illustrative.** Plan cash is applied in one step from the crunch day onward rather than re-simulating 1,000 trajectories per candidate plan. It holds over a 30-day horizon because every lever lands by the crunch day and every repayment falls outside it. The authoritative single figure is `optimal_plan.post_recovery_p10_balance`.
-- **The audit chain head is process-local**, so a single writer is assumed. Two concurrent processes would need the sequence number to come from a database sequence or an advisory lock.
-- **Execution is sandboxed.** `execute_recovery_plan` and its siblings record a verified decision; they do not integrate with a real payment rail.
+- **Synthetic data.** The canonical day-14 scenario was hand-designed to illustrate a payroll collision. Behaviour is exercised across three regimes and all 216 stress combinations by the tests and the benchmark, but there is no import of real books yet.
+- **The 30-day ledger has no recurring obligations.** The day 15–45 echo check therefore says only that the obligations it can see — including the ones the plan creates — are funded; it cannot assess next month's payroll, rent or utilities.
+- **The TypeScript mirror is a greedy heuristic.** It matches the MILP on every shipped scenario (benchmark above), but Python is authoritative whenever reachable, and the Plan B re-solves always use the mirror.
+- **Authentication is password-only.** No MFA or step-up for approvals, no email verification, no password reset flow (the owner re-provisions). Rate limiting is Better Auth's in-memory limiter, per process.
+- **Single-writer storage.** SQLite serialises writers and the approval/execution transaction is atomic, but the audit chain's JSONL file still assumes one writer per file.
+- **AI providers:** OpenRouter (`z-ai/glm-5.3-flash`) was verified live with a read-only check on 2026-10-19; Gemini (`gemini-3.1-flash-lite`) was not, because the API answered 503 (high demand) on every attempt. Both adapters are covered by scripted tests. The recorded evidence chain predates both.
+- **Execution is sandboxed.** Nothing integrates with a payment rail, mail transport or lender API; counterparty responses are simulated by the owner.
 
 ---
 

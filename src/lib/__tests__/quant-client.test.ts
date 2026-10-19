@@ -15,6 +15,7 @@ import {
   optimizeRecovery,
   pledgeableAr,
   procrastinationCurve,
+  uncertaintyWindows,
 } from "../quant-client";
 import {
   parseScenarioPresetId,
@@ -27,6 +28,18 @@ import { applyStress, BASELINE_STRESS, parseStressControls } from "../stress-con
 // Probed at module scope: `it.runIf` is evaluated while tests are collected,
 // which happens before any beforeAll hook could set this.
 const engineUp = await engineHealth();
+
+describe("uncertaintyWindows", () => {
+  it("finds the days where the P10-P90 band is open, and nothing where the percentiles coincide", () => {
+    const p10 = [52, 52, 42, 42, 68, 9, 9, -49, -49, -49, -49, -6];
+    const p90 = [52, 52, 68, 102, 102, 9, 9, -49, -49, -49, -6, 2];
+    const forecast = { p10_trajectory: p10, p90_trajectory: p90 } as unknown as Parameters<typeof uncertaintyWindows>[0];
+    expect(uncertaintyWindows(forecast)).toEqual([
+      { from: 3, to: 5, max_spread: 60, max_day: 4 },
+      { from: 11, to: 12, max_spread: 43, max_day: 11 },
+    ]);
+  });
+});
 
 describe("quant client", () => {
   it("falls back to the deterministic TS mirror without a Python engine", () => {
@@ -79,7 +92,7 @@ describe("quant client", () => {
       f.p90_trajectory.reduce((sum, v, i) => sum + (v - f.p10_trajectory[i]), 0) / f.horizon_days;
 
     expect(meanSpread(correlated)).toBeGreaterThan(meanSpread(independent));
-    // rho = 0 is the default every canonical Apex figure is pinned to.
+    // rho = 0 is the default every canonical Smart Jeans figure is pinned to.
     expect(localForecast({ ...state, correlation_rho: 0 }).p10_trajectory).toEqual(
       independent.p10_trajectory,
     );

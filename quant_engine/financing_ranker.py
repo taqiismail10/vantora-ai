@@ -22,7 +22,11 @@ MATCH_EXCEPTIONS = frozenset({"QTY_VARIANCE", "PRICE_VARIANCE"})
 
 
 def pledgeable_ar(state: SmeFinancialStateInput) -> float:
-    return sum(i.amount for i in state.invoices_ar if i.match_status not in MATCH_EXCEPTIONS)
+    return sum(
+        i.amount
+        for i in state.invoices_ar
+        if i.match_status not in MATCH_EXCEPTIONS and i.inflow_kind == "invoice"
+    )
 
 
 def effective_cost(option: FinancingOption, amount: float, days: int = BRIDGE_TERM_DAYS) -> float:

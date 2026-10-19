@@ -110,10 +110,14 @@ export function StressController({
   const [open, setOpen] = useState(false);
   const { stress } = data;
   const custom = !data.stress_is_baseline;
+  // The shift-scale dial rewrites payroll with the demonstration plant's
+  // per-head figure, so it is offered only where that figure is the truth.
+  const demo = data.company.is_demo;
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
+        {data.profile.available.length > 0 ? (
         <div
           role="group"
           aria-label="Scenario preset"
@@ -139,13 +143,14 @@ export function StressController({
               >
                 <span className={cn("size-1.5 rounded-full", style.dot)} />
                 {option.label}
-                <span className="font-mono text-[10px] opacity-70">
+                <span className="font-mono text-[10px]">
                   [{BAND_CAPTION[option.alert_band] ?? option.alert_band}]
                 </span>
               </button>
             );
           })}
         </div>
+        ) : null}
 
         <button
           type="button"
@@ -188,18 +193,20 @@ export function StressController({
               { value: 21, label: "+21d" },
             ]}
           />
-          <Dial
-            label="Plant shift scale"
-            hint="Operators on the floor at $680 a head. Moves the payroll run, which is the hard constraint."
-            value={stress.workforce}
-            disabled={busy}
-            onChange={(workforce) => onStress({ workforce })}
-            options={[
-              { value: 100, label: "100 ops · $68k" },
-              { value: 125, label: "125 ops · $85k" },
-              { value: 150, label: "150 ops · $102k" },
-            ]}
-          />
+          {demo ? (
+            <Dial
+              label="Plant shift scale"
+              hint="Operators on the floor at $680 a head. Moves the payroll run, which is the hard constraint."
+              value={stress.workforce}
+              disabled={busy}
+              onChange={(workforce) => onStress({ workforce })}
+              options={[
+                { value: 100, label: "100 ops · $68k" },
+                { value: 125, label: "125 ops · $85k" },
+                { value: 150, label: "150 ops · $102k" },
+              ]}
+            />
+          ) : null}
           <Dial
             label="Systemic correlation ρ"
             hint="Shared factor across buyer delays. Above zero the whole receivables book slips together."
@@ -225,8 +232,10 @@ export function StressController({
           />
           <p className="w-full text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
             {custom
-              ? "Every control change re-runs the 1,000-trajectory forecast and re-solves the MILP against the perturbed inputs. The canonical figures no longer apply."
-              : "All four controls are at rest, so this is the canonical dataset: $52,000 opening cash, a $74,700 day-14 gap and a $1,368.88 optimal plan."}
+              ? "Every control change re-runs the 1,000-trajectory forecast and re-solves the MILP against the perturbed inputs. These are assumptions you chose, not facts about your business."
+              : demo
+                ? "All four controls are at rest, so this is the canonical dataset: $52,000 opening cash, a $74,700 day-14 gap and a $1,368.88 optimal plan."
+                : "The controls are at rest, so this is your own data as entered. Moving a dial asks a what-if question; it does not change your records."}
           </p>
         </div>
       ) : null}

@@ -11,13 +11,19 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { getPrismaClient } from "./seed-data";
 
 export const GENESIS_HASH = "0".repeat(64);
-export const LOG_FILE = join(process.cwd(), "logs", "sandbox_operation_logs.jsonl");
+/**
+ * The application chain. Tests point `VANTORA_AUDIT_LOG` at a temp file (see
+ * `vitest.setup.ts`) so a test run can never rewrite the evidence a reviewer
+ * is shown.
+ */
+export const LOG_FILE =
+  process.env.VANTORA_AUDIT_LOG ?? join(process.cwd(), "logs", "sandbox_operation_logs.jsonl");
 
 export type PermissionTierName =
   | "TIER_0_AUTO_READ"
@@ -83,23 +89,37 @@ export function computeEntryHash(entry: Omit<AuditLogEntry, "currentLogHash">): 
 }
 
 export function readChain(): AuditLogEntry[] {
-  if (!existsSync(LOG_FILE)) return [];
-  return readFileSync(LOG_FILE, "utf8")
+  if (!existsSync(/* turbopackIgnore: true */ LOG_FILE)) return [];
+  return readFileSync(/* turbopackIgnore: true */ LOG_FILE, "utf8")
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as AuditLogEntry);
 }
 
-// ponytail: the chain head is process-local, so a single writer is assumed.
-// Upgrade path if two processes ever log at once: take the seq from a DB
-// sequence (or an advisory lock) instead of the in-memory tail.
-let head: { seq: number; hash: string } | null = null;
+// ponytail: one writer per file is assumed. The cached head is trusted only
+// while the file is exactly the size this process last left it; any outside
+// change (another process, a restore, a manual edit) makes the next append
+// re-read the real tail and continue from it, so the cache can never fork the
+// chain onto a head that is no longer in the file. Two processes appending in
+// the same instant can still collide — upgrade to an advisory lock or a DB
+// sequence before running more than one writer.
+let head: { seq: number; hash: string; size: number } | null = null;
+
+const fileSize = () => (existsSync(/* turbopackIgnore: true */ LOG_FILE) ? statSync(/* turbopackIgnore: true */ LOG_FILE).size : 0);
 
 function chainHead(): { seq: number; hash: string } {
-  if (head) return head;
+  const size = fileSize();
+  if (head && head.size === size) return head;
   const existing = readChain();
   const last = existing[existing.length - 1];
-  head = last ? { seq: last.seq, hash: last.currentLogHash } : { seq: 0, hash: GENESIS_HASH };
+  if (head && last && head.seq !== last.seq) {
+    console.warn(
+      `[audit] ${LOG_FILE} changed outside this process (cached seq ${head.seq}, file tail seq ${last.seq}); continuing from the file`,
+    );
+  }
+  head = last
+    ? { seq: last.seq, hash: last.currentLogHash, size }
+    : { seq: 0, hash: GENESIS_HASH, size };
   return head;
 }
 
@@ -133,9 +153,9 @@ export async function logOperation(input: LogOperationInput): Promise<AuditLogEn
 
   const entry: AuditLogEntry = { ...unhashed, currentLogHash: computeEntryHash(unhashed) };
 
-  mkdirSync(dirname(LOG_FILE), { recursive: true });
-  appendFileSync(LOG_FILE, `${JSON.stringify(entry)}\n`, "utf8");
-  head = { seq: entry.seq, hash: entry.currentLogHash };
+  mkdirSync(dirname(/* turbopackIgnore: true */ LOG_FILE), { recursive: true });
+  appendFileSync(/* turbopackIgnore: true */ LOG_FILE, `${JSON.stringify(entry)}\n`, "utf8");
+  head = { seq: entry.seq, hash: entry.currentLogHash, size: fileSize() };
 
   const prisma = await getPrismaClient();
   if (prisma?.auditLog) {
@@ -177,6 +197,6 @@ export function verifyChain(entries: AuditLogEntry[] = readChain()): ChainVerifi
 
 /** Test-only: drop the local chain so a run starts from genesis. */
 export function resetAuditLog(): void {
-  if (existsSync(LOG_FILE)) rmSync(LOG_FILE);
+  if (existsSync(/* turbopackIgnore: true */ LOG_FILE)) rmSync(/* turbopackIgnore: true */ LOG_FILE);
   head = null;
 }

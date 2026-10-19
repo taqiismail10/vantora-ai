@@ -3,12 +3,21 @@
  * that lets anyone attack the gate without touching the ledger.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { POST } from "../../app/api/action/route";
 import { localForecast, localOptimize } from "../quant-client";
 import { counterpartyFallbacks, postCrunchEchoCheck } from "../recovery-scenarios";
-import { readChain } from "../sandbox/execution-logger";
+import { logOperation, readChain } from "../sandbox/execution-logger";
+import { jsonRequest, signedInAs } from "../server/__tests__/helpers";
+
+// The probe is read-only but not anonymous: any signed-in role may use it.
+let viewer: string;
+beforeAll(async () => {
+  viewer = await signedInAs("VIEWER");
+  // Give the per-run chain a head, so "unchanged" is a real comparison.
+  await logOperation({ actorId: "test", operation: "read_sme_profile", tier: "TIER_0_AUTO_READ", decision: "ALLOWED", reason: "seed" });
+});
 import { SCENARIO_PRESETS, smartJeansFinancialState } from "../sandbox/seed-data";
 import { attestationBundle } from "../agent/vantora-copilot";
 import { detectIndirectPromptInjection, verifyNumericalIntegrity } from "../security/permission-gate";
@@ -144,6 +153,7 @@ describe("custom security probe screens", () => {
     planId: "smartjeans-crunch-d14",
     smeProfileId: "test",
     sandboxProfile: "SOLVABLE_DAY14_CRUNCH",
+    memos: {},
   });
 
   it("passes a benign memo and quarantines an adversarial one", () => {
@@ -201,13 +211,7 @@ describe("custom security probe screens", () => {
    */
   it("appends nothing to the audit chain, however hostile the probe", async () => {
     const probe = (payload: Record<string, unknown>) =>
-      POST(
-        new Request("http://localhost/api/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "custom_security_probe", ...payload }),
-        }),
-      );
+      POST(jsonRequest("/api/action", { action: "custom_security_probe", ...payload }, viewer));
 
     const before = readChain();
     expect(before.length).toBeGreaterThan(0);
@@ -234,14 +238,7 @@ describe("custom security probe screens", () => {
 
 describe("POST /api/action — custom_security_probe", () => {
   const call = async (body: unknown) => {
-    const { POST } = await import("../../app/api/action/route");
-    const response = await POST(
-      new Request("http://localhost/api/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-    );
+    const response = await POST(jsonRequest("/api/action", body, viewer));
     return { status: response.status, json: await response.json() };
   };
 
@@ -255,6 +252,9 @@ describe("POST /api/action — custom_security_probe", () => {
     expect(json.action).toBe("custom_security_probe");
     expect(json.memo).toMatchObject({ quarantined: true, severity: "critical" });
     expect(json.memo.tier).toBe("TIER_3_PROHIBITED");
+    // The planted account number is masked in everything returned for display.
+    expect(JSON.stringify(json.memo)).not.toContain("998877");
+    expect(json.memo.sanitized_excerpt).toContain("••••77");
     expect(json.memo.matched_patterns.length).toBeGreaterThan(0);
     expect(json.numbers).toBeNull();
   });

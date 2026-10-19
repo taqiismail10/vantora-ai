@@ -20,15 +20,19 @@ import { cn } from "@/lib/utils";
 
 import { ActionCenter } from "./action-center";
 import { AuditLedger } from "./audit-ledger";
-import { fetchDashboardState, runRedTeamDrill } from "./client-api";
+import { fetchDashboardState, runRedTeamDrill, scenarioOf, SessionExpiredError } from "./client-api";
+import { CoveragePanel } from "./coverage-panel";
 import { LiquidityRadar } from "./liquidity-radar";
-import { DecisionBadge, SectionHeading, TierBadge } from "./primitives";
+import { DecisionBadge, SectionHeading, setDisplayCurrency, TierBadge } from "./primitives";
 import { RecoveryOptimizer } from "./recovery-optimizer";
 import { StatusBar } from "./status-bar";
-import { VerdictBar } from "./verdict-bar";
+import { ProgressRail, VerdictBar } from "./verdict-bar";
 
 export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const [data, setData] = useState<DashboardState>(initial);
+  // Set during render, before any child formats a figure. One company's
+  // numbers are on screen at a time and switching reloads the page.
+  setDisplayCurrency(data.company.currency);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [redTeam, setRedTeam] = useState<RedTeamResult | null>(null);
@@ -39,6 +43,9 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   // back to the baseline scenario on the next append to the chain.
   const [preset, setPreset] = useState(initial.profile.id);
   const [stress, setStress] = useState<StressControls>(initial.stress);
+  const [expired, setExpired] = useState(false);
+  const [openPlanApproval, setOpenPlanApproval] = useState(false);
+  const clearPlanApproval = useCallback(() => setOpenPlanApproval(false), []);
 
   // No state is set before the first `await`, so the mount effect below does not
   // trigger a cascading render (react-hooks/set-state-in-effect).
@@ -48,7 +55,8 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
         setData(await fetchDashboardState({ profile: preset, ...stress, ...next }));
         setError(null);
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        if (cause instanceof SessionExpiredError) setExpired(true);
+        else setError(cause instanceof Error ? cause.message : String(cause));
       }
     },
     [preset, stress],
@@ -81,10 +89,11 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const drill = async () => {
     setRedTeamBusy(true);
     try {
-      setRedTeam(await runRedTeamDrill());
+      setRedTeam(await runRedTeamDrill(scenarioOf(data)));
       await refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (cause instanceof SessionExpiredError) setExpired(true);
+      else setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setRedTeamBusy(false);
     }
@@ -92,6 +101,15 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
 
   return (
     <div className="flex min-h-full flex-col bg-slate-50 dark:bg-slate-950">
+      {expired ? (
+        <div role="alert" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          Your session has expired, so nothing further can be read or approved.{" "}
+          <a href="/login?reason=expired" className="font-medium underline">
+            Sign in again
+          </a>
+          .
+        </div>
+      ) : null}
       {error ? (
         <div className="border-b border-rose-300 bg-rose-50 px-4 py-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
           Last refresh failed: <span className="font-mono">{error}</span>
@@ -112,11 +130,13 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
       <main className="mx-auto w-full max-w-[1600px] flex-1 overflow-x-hidden px-4 py-4">
         <div className="flex flex-col gap-4">
           <VerdictBar data={data} onReviewPlan={() => setTab("optimizer")} />
+          <ProgressRail data={data} onNavigate={setTab} />
+          <CoveragePanel coverage={data.coverage} />
 
           <Tabs value={tab} onValueChange={setTab}>
-            {/* w-full + overflow-x-auto keeps the 4th tab reachable at 360px;
-                shrink-0 stops the triggers compressing into unreadable stubs. */}
-            <TabsList className="h-9 w-full justify-start overflow-x-auto">
+            {/* A 2x2 grid on phones so all four workspaces are visible at
+                360px without a hidden horizontal scroll; one row from sm up. */}
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:flex sm:h-9 sm:justify-start">
               <TabsTrigger value="liquidity" className="shrink-0">
                 Liquidity radar
               </TabsTrigger>
@@ -135,10 +155,21 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
               <LiquidityRadar data={data} />
             </TabsContent>
             <TabsContent value="optimizer" className="pt-4">
-              <RecoveryOptimizer data={data} onApprove={() => setTab("copilot")} />
+              <RecoveryOptimizer
+                data={data}
+                onApprove={() => {
+                  setOpenPlanApproval(true);
+                  setTab("copilot");
+                }}
+              />
             </TabsContent>
             <TabsContent value="copilot" className="pt-4">
-              <ActionCenter data={data} onLedgerChanged={refresh} />
+              <ActionCenter
+                data={data}
+                onLedgerChanged={() => refresh()}
+                openPlanApproval={openPlanApproval}
+                onPlanApprovalHandled={clearPlanApproval}
+              />
             </TabsContent>
             <TabsContent value="ledger" className="pt-4">
               <AuditLedger data={data} />
@@ -147,12 +178,36 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
         </div>
       </main>
 
+      <footer className="border-t border-slate-200 px-4 py-3 text-[11px] leading-relaxed text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <div className="mx-auto max-w-[1600px]">
+          {data.company.is_demo ? (
+            <>
+              <strong className="font-medium">Synthetic sandbox.</strong> Smart Jeans Manufacturing Ltd. and its ledger
+              are invented for this demonstration (dataset {data.scenario.dataset_version}, day 0 ={" "}
+              {data.scenario.as_of_date}). Buyer, supplier, lender and insurer names are used illustratively; no
+              affiliation with, or data from, any real company is implied. The canonical day-14 scenario was
+              hand-designed to illustrate a payroll collision; behaviour is also exercised across three regimes and
+              every stress-dial combination by the test suite. Nothing here moves real money or contacts a real
+              counterparty.
+            </>
+          ) : (
+            <>
+              <strong className="font-medium">Your records, sandbox execution.</strong> Every figure above is computed
+              from what you entered for {data.company.name} (data version {data.scenario.dataset_version}, day 0 ={" "}
+              {data.scenario.as_of_date}), over a {30}-day window. Balances are as entered and are not reconciled
+              against a bank statement. Approving and submitting an action records it here and moves the simulated
+              position — nothing is sent to a real buyer, supplier or lender, and no money moves.
+            </>
+          )}
+        </div>
+      </footer>
+
       <Dialog open={redTeam !== null} onOpenChange={(open) => (open ? null : setRedTeam(null))}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               {redTeam?.summary.passed ? (
-                <ShieldCheck className="size-4 text-emerald-600" />
+                <ShieldCheck className="size-4 text-emerald-700" />
               ) : (
                 <ShieldAlert className="size-4 text-rose-600" />
               )}

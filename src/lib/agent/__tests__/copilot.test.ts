@@ -10,16 +10,15 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   answerDeterministically,
-  askCopilot,
   attestationBundle,
   COPILOT_TOOLS,
   loadCopilotContext,
   runCopilotTool,
   screenInvoiceMemos,
   synthesizeNarrative,
-  tier2Payload,
   type CopilotContext,
 } from "../vantora-copilot";
+import { askCopilot } from "../ask";
 import { GENESIS_HASH, readChain, verifyChain } from "../../sandbox/execution-logger";
 import {
   classifyOperation,
@@ -148,29 +147,32 @@ describe("every tool runs through the permission gate", () => {
       userApprovalToken: issueApprovalToken({
         operation: "accept_financing_offer",
         planId: ctx.planId,
-        actorId: "cfo@apex",
+        actorId: "owner@smartjeans.example",
       }),
     });
     expect(run.ok).toBe(false);
     expect(run.gate.reason).toContain("issued for");
   });
 
-  it("executes Tier 2 once a human approves that exact plan", async () => {
+  it("never executes Tier 2 here, even with a token that genuinely verifies", async () => {
+    // Sandbox execution lives only in server/approvals.ts, behind an
+    // authenticated owner and a database approval row. A correctly signed
+    // token presented straight to the tool runner is refused and logged.
+    const input = { plan_id: ctx.planId };
     const run = await runCopilotTool({
       tool: "execute_recovery_plan",
-      input: { plan_id: ctx.planId },
+      input,
       ctx,
       userApprovalToken: issueApprovalToken({
         operation: "execute_recovery_plan",
         planId: ctx.planId,
-        actorId: "cfo@apex",
-        payload: tier2Payload("execute_recovery_plan", { plan_id: ctx.planId }, ctx),
+        actorId: "owner@smartjeans.example",
+        payload: input,
       }),
     });
-    expect(run.ok).toBe(true);
-    expect(run.gate.decision).toBe("ALLOWED");
-    expect(run.gate.tokenVerification?.valid).toBe(true);
-    expect(run.output).toMatchObject({ executed_in_sandbox: true, meets_buffer: true });
+    expect(run.ok).toBe(false);
+    expect(run.gate.decision).toBe("DENIED");
+    expect(run.gate.reason).toMatch(/only through the approval service/);
   });
 
   it("escalates a memo-carrying read into Tier 3 and denies it", async () => {
@@ -222,9 +224,17 @@ describe("every tool runs through the permission gate", () => {
 
 describe("askCopilot", () => {
   it("answers deterministically and attests the answer when no API key is set", async () => {
-    const turn = await askCopilot({ question: "what does the recovery plan cost?", ctx });
+    const turn = await askCopilot({
+      question: "what does the recovery plan cost?",
+      ctx,
+      actorLabel: "test",
+      dispatch: async () => {
+        throw new Error("no tool may run when the model is not configured");
+      },
+    });
     expect(turn.source).toBe("deterministic");
     expect(turn.model).toBeNull();
+    expect(turn.fallback_reason).toBe("not_configured");
     expect(turn.numericalIntegrity.ok).toBe(true);
     expect(turn.answer).toContain("$");
   });

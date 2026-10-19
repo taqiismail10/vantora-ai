@@ -402,3 +402,23 @@ def test_payroll_is_never_a_deferral_lever_even_if_marked_flexible(apex):
     plan = optimize(apex).optimal_plan
     assert plan.feasible
     assert all(a.target_id != payroll.id for a in plan.actions)
+
+
+def test_in_flight_funding_is_never_collateral(apex):
+    """A drawdown already submitted is modelled as an inflow, not a receivable."""
+    before = pledgeable_ar(apex)
+    apex.invoices_ar.append(
+        ArInvoice(
+            id="FUNDING-FIN-MERIDIAN-1",
+            customer_name="Meridian drawdown (in flight)",
+            amount=2_345.0,
+            due_day=1,
+            expected_delay_days_mean=0,
+            expected_delay_days_std=0,
+            reliability_score=1.0,
+            inflow_kind="expected_funding",
+        )
+    )
+    assert pledgeable_ar(apex) == pytest.approx(before)
+    # And it is not a discount lever either.
+    assert all(a.target_id != "FUNDING-FIN-MERIDIAN-1" for a in optimize(apex, forecast(apex)).optimal_plan.actions)

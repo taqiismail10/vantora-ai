@@ -11,11 +11,40 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { PermissionTier } from "@/lib/security/permission-gate";
 
-export const money = (value: number, maxFractionDigits = 0) =>
-  `${value < 0 ? "-" : ""}$${Math.abs(value).toLocaleString("en-US", {
+const CURRENCY_DISPLAY: Record<string, { symbol: string; locale: string }> = {
+  USD: { symbol: "$", locale: "en-US" },
+  BDT: { symbol: "৳", locale: "en-BD" },
+  CNY: { symbol: "¥", locale: "zh-CN" },
+};
+
+// One company's figures are on screen at a time, and switching company is a
+// full page reload, so the active currency is module state set by the shell
+// during render rather than a prop threaded through 114 call sites.
+//
+// ponytail: this is safe only because the dashboard subtree contains no
+// Suspense or lazy boundary, so server-side rendering walks it in a single
+// synchronous pass and two concurrent requests cannot interleave between the
+// shell setting the currency and a child reading it. Module state is shared
+// per server process, so adding a suspending boundary inside the dashboard
+// would let one company's figures render with another's currency symbol.
+// If that is ever needed — or if two currencies must render together — move
+// this to a React context and bind the formatter per subtree.
+let activeCurrency = "USD";
+
+/** Called by the dashboard shell during render, before any child formats money. */
+export function setDisplayCurrency(code: string) {
+  activeCurrency = CURRENCY_DISPLAY[code] ? code : "USD";
+}
+
+export const currencySymbol = () => CURRENCY_DISPLAY[activeCurrency].symbol;
+
+export const money = (value: number, maxFractionDigits = 0) => {
+  const { symbol, locale } = CURRENCY_DISPLAY[activeCurrency];
+  return `${value < 0 ? "-" : ""}${symbol}${Math.abs(value).toLocaleString(locale, {
     minimumFractionDigits: 0,
     maximumFractionDigits: maxFractionDigits,
   })}`;
+};
 
 export const money2 = (value: number) => money(value, 2);
 
@@ -119,8 +148,8 @@ export function KpiCard({
 }) {
   const valueTone = {
     neutral: "text-slate-900 dark:text-slate-50",
-    good: "text-emerald-600 dark:text-emerald-400",
-    warn: "text-amber-600 dark:text-amber-400",
+    good: "text-emerald-700 dark:text-emerald-400",
+    warn: "text-amber-700 dark:text-amber-400",
     bad: "text-rose-600 dark:text-rose-400",
   }[tone];
 
@@ -160,8 +189,8 @@ export function Metric({
 }) {
   const valueTone = {
     neutral: "text-slate-900 dark:text-slate-100",
-    good: "text-emerald-600 dark:text-emerald-400",
-    warn: "text-amber-600 dark:text-amber-400",
+    good: "text-emerald-700 dark:text-emerald-400",
+    warn: "text-amber-700 dark:text-amber-400",
     bad: "text-rose-600 dark:text-rose-400",
   }[tone];
   return (

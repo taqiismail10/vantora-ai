@@ -775,7 +775,8 @@ export async function getPrismaClient(): Promise<PrismaLike | null> {
 }
 
 export interface SeedResult {
-  mode: "prisma" | "in-memory";
+  /** "company" means a customer's own records, not the demonstration dataset. */
+  mode: "prisma" | "in-memory" | "company";
   smeProfileId: string;
   invoices: number;
   payables: number;

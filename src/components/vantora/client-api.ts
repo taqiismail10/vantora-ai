@@ -5,8 +5,23 @@ import type {
   ApprovalResult,
   CopilotTurnResponse,
   DashboardState,
+  ExecutionResult,
   RedTeamResult,
 } from "@/lib/dashboard-state";
+import type { StressControls } from "@/lib/stress-controls";
+
+/** Thrown on 401 so the shell can show "session expired" instead of a raw error. */
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Your session has expired. Sign in again to continue.");
+  }
+}
+
+/** The scenario every write must carry, exactly as the payload reported it. */
+export interface ScenarioInput {
+  profile: string;
+  stress: StressControls;
+}
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
@@ -15,8 +30,13 @@ async function post<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
     cache: "no-store",
   });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.error ?? `${url} failed with ${response.status}`);
+  if (response.status === 401) throw new SessionExpiredError();
+  const payload = await response.json().catch(() => ({}));
+  // Execution refusals come back as 403 with a full gate decision; the caller
+  // shows the decision rather than treating it as a transport failure.
+  if (!response.ok && !(payload && typeof payload === "object" && "decision" in payload)) {
+    throw new Error(payload?.error ?? `${url} failed with ${response.status}`);
+  }
   return payload as T;
 }
 
@@ -42,29 +62,43 @@ export async function fetchDashboardState(
   if (options.priorExtensions) query.set("priorExtensions", String(options.priorExtensions));
   const suffix = query.size ? `?${query}` : "";
   const response = await fetch(`/api/state${suffix}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`/api/state failed with ${response.status}`);
+  if (response.status === 401) throw new SessionExpiredError();
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.error ?? `/api/state failed with ${response.status}`);
+  }
   return (await response.json()) as DashboardState;
 }
 
-export const runTool = (tool: string, input: Record<string, unknown> = {}, userApprovalToken?: string) =>
-  post<ActionResult>("/api/action", {
-    action: userApprovalToken ? "execute" : "draft",
-    tool,
-    input,
-    userApprovalToken,
-  });
+export const scenarioOf = (data: DashboardState): ScenarioInput => ({
+  profile: data.scenario.profile,
+  stress: data.scenario.stress,
+});
 
-/**
- * The input must match the one the execute call sends: the minted token
- * commits to a digest of the payload built from it.
- */
+/** Tier 0 / Tier 1 only. Tier 2 goes through approve → execute. */
+export const runTool = (scenario: ScenarioInput, tool: string, input: Record<string, unknown> = {}) =>
+  post<ActionResult>("/api/action", { action: "draft", tool, input, scenario });
+
+export type Target = { kind: "plan" } | { kind: "action"; actionKey: string };
+
 export const requestApproval = (
-  operation: string,
-  input: Record<string, unknown> = {},
-  confirmedAmount?: number,
-) => post<ApprovalResult>("/api/action", { action: "approve", operation, input, confirmedAmount });
+  scenario: ScenarioInput,
+  target: Target,
+  confirmation: string,
+  delegateToAgent = false,
+) => post<ApprovalResult>("/api/action", { action: "approve", target, confirmation, delegateToAgent, scenario });
 
-export const runRedTeamDrill = () => post<RedTeamResult>("/api/action", { action: "red_team" });
+export const executeApproved = (scenario: ScenarioInput, target: Target, userApprovalToken: string) =>
+  post<ExecutionResult>("/api/action", { action: "execute", target, userApprovalToken, scenario });
+
+export const simulateResponse = (scenario: ScenarioInput, actionKey: string, response: string) =>
+  post<{ action: "simulate"; status: string; revoked_approvals: number; seq: number; plan_version: string }>(
+    "/api/action",
+    { action: "simulate", actionKey, response, scenario },
+  );
+
+export const runRedTeamDrill = (scenario: ScenarioInput) =>
+  post<RedTeamResult>("/api/action", { action: "red_team", scenario });
 
 /** One read-only run of both security screens over caller-supplied text. */
 export interface SecurityProbeResult {
@@ -98,5 +132,5 @@ export const verifyAuditChain = () =>
     { action: "verify_chain" },
   );
 
-export const askCopilotQuestion = (question: string) =>
-  post<CopilotTurnResponse>("/api/copilot", { question });
+export const askCopilotQuestion = (scenario: ScenarioInput, question: string) =>
+  post<CopilotTurnResponse>("/api/copilot", { question, scenario });

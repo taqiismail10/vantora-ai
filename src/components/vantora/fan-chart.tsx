@@ -59,6 +59,9 @@ export function FanChart({
   /** True = reveal P90, the band and the percentile vocabulary. */
   showQuantMath: boolean;
 }) {
+  // Recharts animates by default; honour the operating-system setting.
+  const reducedMotion =
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   const { forecast, optimization, state, post_recovery_p10_trajectory } = data;
   const crunchDay = forecast.first_shortfall_day ?? optimization.crunch_day;
   const decisionDay = forecast.decision_day;
@@ -183,7 +186,7 @@ export function FanChart({
             stroke={showRecovery ? COLORS.recovered : COLORS.p10}
             strokeWidth={2.5}
             dot={false}
-            isAnimationActive
+            isAnimationActive={!reducedMotion}
             animationDuration={500}
           />
 

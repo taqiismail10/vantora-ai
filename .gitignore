@@ -33,6 +33,8 @@ next-env.d.ts
 # The audit chain is evidence produced by a run, not source. It is regenerated
 # by `npx vitest run` and by using the app.
 /logs/
+# App database: accounts, sessions, approvals, sandbox executions. Never commit.
+/data/
 *.log
 *.jsonl
 npm-debug.log*
@@ -61,3 +63,10 @@ yarn-error.log*
 # ── misc ──────────────────────────────────────────────────────────────────────
 .DS_Store
 *.pem
+
+# ── local docs & assets ───────────────────────────────────────────────────────
+/Vantora AI Master Execution Plan.md
+/Screenshot 2026-10-19 222925.png
+/Screenshot 2026-10-19 222937.png
+/Screenshot 2026-10-19 222947.png
+/FinTechathon.pdf

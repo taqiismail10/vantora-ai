@@ -25,11 +25,11 @@ import type { ArInvoiceInput } from "@/lib/quant-client";
 import { scheduledArrival } from "@/lib/recovery-scenarios";
 import { cn } from "@/lib/utils";
 
-import { money, pct } from "./primitives";
+import { currencySymbol, money, pct } from "./primitives";
 
 /** Settlement figures are quoted to the cent, round number or not. */
 const exact = (value: number) =>
-  `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  `${currencySymbol()}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** The buyer's own reference for this shipment, and where the money goes. */
 const PORTAL_RECORD = {
@@ -128,7 +128,7 @@ function PortalRow({
       <span
         className={cn(
           "text-xs tabular-nums",
-          tone === "good" && "font-medium text-emerald-600 dark:text-emerald-400",
+          tone === "good" && "font-medium text-emerald-700 dark:text-emerald-400",
           tone === "warn" && "font-medium text-amber-700 dark:text-amber-400",
         )}
       >
@@ -181,10 +181,15 @@ export function BuyerPortalPreview({
             </p>
           </div>
           <Badge variant="outline" className="shrink-0 text-[10px]">
-            read-only preview
+            illustrative preview
           </Badge>
         </div>
 
+        <p className="border-b border-slate-200 bg-amber-50/60 px-3 py-1.5 text-[10px] leading-relaxed text-amber-900 dark:border-slate-800 dark:bg-amber-950/20 dark:text-amber-200">
+          Illustrative values: the PO reference, goods-receipt record, vendor number, bank coordinates and Zara&apos;s
+          5.2% hurdle rate are invented for this preview. The invoice amount, discount and settlement figures come from
+          the ledger. No portal is sent.
+        </p>
         <div className="px-3 py-1">
           <PortalRow label="Invoice" value={`${invoice.id} · ${PORTAL_RECORD.purchaseOrder}`} />
           <PortalRow label="Face value" value={exact(invoice.amount)} />

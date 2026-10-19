@@ -6,6 +6,8 @@
  * hash-chained entries in logs/sandbox_operation_logs.jsonl (Deliverable 06).
  */
 
+import { writeFileSync } from "node:fs";
+
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -16,6 +18,8 @@ import {
 } from "../../quant-client";
 import {
   GENESIS_HASH,
+  LOG_FILE,
+  logOperation,
   readChain,
   resetAuditLog,
   verifyChain,
@@ -41,7 +45,7 @@ import {
 } from "../permission-gate";
 
 const ACTOR = "agent:vantora-recovery-copilot";
-const PLAN_ID = "plan-apex-day14";
+const PLAN_ID = "plan-smartjeans-day14";
 
 let forecast: ForecastResult;
 let optimization: OptimizationResult;
@@ -109,7 +113,7 @@ beforeAll(async () => {
     userApprovalToken: issueApprovalToken({
       operation: "execute_recovery_plan",
       planId: PLAN_ID,
-      actorId: "human:owner@apexmfg.example",
+      actorId: "human:owner@smartjeans.example",
       payload: executeArgs,
     }),
   });
@@ -122,7 +126,7 @@ beforeAll(async () => {
     userApprovalToken: issueApprovalToken({
       operation: "draft_recovery_plan_summary",
       planId: PLAN_ID,
-      actorId: "human:owner@apexmfg.example",
+      actorId: "human:owner@smartjeans.example",
     }),
   });
 
@@ -133,7 +137,7 @@ beforeAll(async () => {
     userApprovalToken: issueApprovalToken({
       operation: "send_supplier_deferral_email",
       planId: PLAN_ID,
-      actorId: "human:owner@apexmfg.example",
+      actorId: "human:owner@smartjeans.example",
       ttlMs: -1_000,
     }),
   });
@@ -166,7 +170,7 @@ beforeAll(async () => {
     userApprovalToken: issueApprovalToken({
       operation: "wire_funds_to_external_account",
       planId: PLAN_ID,
-      actorId: "human:owner@apexmfg.example",
+      actorId: "human:owner@smartjeans.example",
     }),
   });
 
@@ -181,7 +185,7 @@ beforeAll(async () => {
   const meridianToken = issueApprovalToken({
     operation: "accept_financing_offer",
     planId: PLAN_ID,
-    actorId: "human:owner@apexmfg.example",
+    actorId: "human:owner@smartjeans.example",
     payload: meridianDraw,
     confirmedAmount: 2_345,
   });
@@ -221,7 +225,7 @@ beforeAll(async () => {
 // ------------------------------------------------------------- recovery workflow
 
 describe("end-to-end recovery workflow", () => {
-  it("seeds Apex Manufacturing in memory when Supabase is not connected", async () => {
+  it("seeds Smart Jeans Manufacturing in memory when Supabase is not connected", async () => {
     const seeded = await seedSandboxDataset();
     expect(seeded.mode).toBe("in-memory");
     expect(seeded.invoices).toBe(6);
@@ -260,7 +264,7 @@ describe("end-to-end recovery workflow", () => {
     expect(missed).toContain("AP-PAYROLL");
   });
 
-  it("screens out the lender Apex does not qualify for", () => {
+  it("screens out the lender Smart Jeans does not qualify for", () => {
     const granite = optimization.matched_financing_options.find((m) => m.id === "FIN-GRANITE");
     expect(granite?.eligible).toBe(false);
     expect(granite?.rejection_reason).toMatch(/credit score/);
@@ -581,5 +585,28 @@ describe("SHA-256 hash-chained audit log", () => {
   it("detects a deleted entry", () => {
     const tampered = chain.filter((_, i) => i !== 2);
     expect(verifyChain(tampered).valid).toBe(false);
+  });
+});
+
+describe("audit chain head after an outside change", () => {
+  it("continues from the file's real tail when the log was replaced behind the writer", async () => {
+    const entry = () =>
+      logOperation({
+        actorId: "test",
+        actorType: "human",
+        operation: "verify_chain",
+        tier: "TIER_0_AUTO_READ",
+        decision: "ALLOWED",
+        reason: "chain head regression",
+        payload: {},
+      });
+    await entry();
+    const before = readChain();
+    // A restore from an older copy: the cached head now points past the file.
+    writeFileSync(LOG_FILE, before.slice(0, -2).map((e) => JSON.stringify(e)).join("\n") + "\n");
+    await entry();
+    const after = readChain();
+    expect(after.at(-1)!.seq).toBe(before.length - 1);
+    expect(verifyChain(after).valid).toBe(true);
   });
 });

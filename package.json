@@ -11,13 +11,18 @@
     "test:watch": "vitest",
     "quant": "node scripts/run-quant.mjs",
     "dev:all": "concurrently \"npm run dev\" \"npm run quant\"",
-    "db:push": "prisma db push && prisma generate"
+    "db:push": "prisma db push && prisma generate",
+    "users": "tsx scripts/users.ts",
+    "benchmark": "tsx scripts/benchmark-milp-vs-greedy.ts",
+    "verify-evidence": "tsx scripts/verify-evidence.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.135.0",
     "@base-ui/react": "^1.9.0",
+    "@better-auth/infra": "^0.4.20",
+    "@google/genai": "^2.30.0",
     "@prisma/client": "^7.10.1",
     "@supabase/supabase-js": "^2.118.0",
+    "better-auth": "^1.7.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.5.0",
@@ -34,7 +39,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24.19.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "concurrently": "^10.0.6",
@@ -42,6 +47,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5",
     "vitest": "^3.2.4"
   }

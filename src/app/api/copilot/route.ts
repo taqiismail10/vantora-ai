@@ -1,55 +1,67 @@
 /**
- * POST /api/copilot — interactive Q&A with the Vantora Copilot.
+ * POST /api/copilot — one question to the Vantora Copilot. ANALYST or OWNER.
  *
- * `askCopilot` runs the Anthropic tool-use loop when ANTHROPIC_API_KEY is set
- * and the deterministic synthesiser otherwise. Either way the answer is only
- * returned after every dollar figure and percentage in it has been verified
- * against the quant engine's own output.
+ * Gemini answers when GEMINI_API_KEY is configured and the call succeeds; the
+ * deterministic synthesiser answers otherwise, and the response says which
+ * (`source`, `model`, `fallback_reason`). Every model-requested tool runs
+ * through `agentDispatcher` under the signed-in human's authority, capped at
+ * the copilot's own service capabilities.
  */
 
 import { NextResponse } from "next/server";
 
-import { askCopilot, loadCopilotContext } from "@/lib/agent/vantora-copilot";
-import { parseScenarioPresetId, seedSandboxDataset } from "@/lib/sandbox/seed-data";
+import { askCopilot } from "@/lib/agent/ask";
+import { agentDispatcher } from "@/lib/server/agent-tools";
+import {
+  AccessError,
+  AGENT_ID,
+  assertSameOrigin,
+  auditActorId,
+  rejectIdentityFields,
+  requireActor,
+} from "@/lib/server/identity";
+import { loadPlanContext, parseScenarioRef } from "@/lib/server/plan";
+
+const MAX_QUESTION = 1_000;
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as {
-    question?: string;
-    actorId?: string;
-    userApprovalToken?: string;
-    /** Which sandbox SME to answer about. Unrecognised values fall back to Apex. */
-    profile?: string;
-  };
+  try {
+    assertSameOrigin(request);
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    rejectIdentityFields(body);
+    if (body.userApprovalToken !== undefined) {
+      throw new AccessError(400, "the copilot never receives approval tokens");
+    }
+    const question = typeof body.question === "string" ? body.question.trim().slice(0, MAX_QUESTION) : "";
+    if (!question) throw new AccessError(400, "question is required");
 
-  const question = (body.question ?? "").trim();
-  if (!question) return NextResponse.json({ error: "question is required" }, { status: 400 });
+    const actor = await requireActor(request, "analyze");
+    const plan = await loadPlanContext(actor.businessId, parseScenarioRef(body.scenario));
+    const turn = await askCopilot({
+      question,
+      ctx: plan.ctx,
+      dispatch: agentDispatcher(actor, plan),
+      actorLabel: `${AGENT_ID} (for ${auditActorId(actor)})`,
+    });
 
-  const profile = parseScenarioPresetId(body.profile ?? new URL(request.url).searchParams.get("profile"));
-  const seed = await seedSandboxDataset(profile);
-  const ctx = await loadCopilotContext(undefined, seed.smeProfileId, profile);
-  const turn = await askCopilot({
-    question,
-    ctx,
-    actorId: body.actorId ?? "vantora-copilot",
-    userApprovalToken: body.userApprovalToken,
-  });
-
-  return NextResponse.json({
-    question,
-    answer: turn.answer,
-    source: turn.source,
-    model: turn.model,
-    // `attested` is what the UI badge reads: the answer cleared the check, it
-    // was not merely produced.
-    attested: turn.numericalIntegrity.ok,
-    numericalIntegrity: turn.numericalIntegrity,
-    tool_runs: turn.toolRuns.map((run) => ({
-      tool: run.tool,
-      tier: run.gate.tier,
-      decision: run.gate.decision,
-      reason: run.gate.reason,
-      seq: run.gate.auditEntry.seq,
-    })),
-    plan_id: ctx.planId,
-  });
+    return NextResponse.json({
+      question,
+      answer: turn.answer,
+      source: turn.source,
+      model: turn.model,
+      provider: turn.provider,
+      fallback_reason: turn.fallback_reason,
+      fallback_detail: turn.fallback_detail,
+      // `attested` is what the UI badge reads: the answer cleared the check, it
+      // was not merely produced.
+      attested: turn.numericalIntegrity.ok,
+      numericalIntegrity: turn.numericalIntegrity,
+      tool_runs: turn.toolRuns,
+      plan_id: plan.ctx.planId,
+      plan_version: plan.planVersion,
+    });
+  } catch (error) {
+    if (error instanceof AccessError) return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
 }

@@ -116,7 +116,7 @@ export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
               className={cn(
                 "mt-0.5 text-2xl font-semibold tabular-nums tracking-tight",
                 active.feasible
-                  ? "text-amber-600 dark:text-amber-400"
+                  ? "text-amber-700 dark:text-amber-400"
                   : "text-rose-600 dark:text-rose-400",
               )}
             >
@@ -139,7 +139,7 @@ export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
         </div>
 
         <p className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Re-solved by the deterministic mirror against the same forecast, so the gap is identical and only
+          Re-solved by the deterministic TypeScript mirror (a greedy heuristic, not HiGHS) against the same forecast, so the gap is identical and only
           the admissible lever set differs. The delta is mirror-to-mirror arithmetic, not a cross-engine
           subtraction.
         </p>
@@ -179,19 +179,31 @@ export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
           <strong>No next-cycle revenue is assumed</strong> — a solvency proof that leans on sales nobody has
           made yet proves nothing.
         </CardDescription>
+        <p
+          role="note"
+          className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          <strong>Coverage limit:</strong> the ledger is a 30-day book. Recurring obligations that would fall after
+          day 30 — the next monthly payroll, rent and utilities — are not in it, so this check cannot say whether
+          days 31–45 are solvent. It shows only that the obligations it can see, including the ones the plan
+          creates, are funded.
+        </p>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3">
         <div className="grid gap-2 sm:grid-cols-3">
+          {/* Deliberately not "no secondary default": the ledger is a 30-day
+              book, so next month's payroll, rent and utilities are absent from
+              days 31-45. The claim is scoped to what the data contains. */}
           <Verdict
             tone={noDefault ? "good" : "bad"}
             icon={noDefault ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
-            label="Secondary default"
-            value={noDefault ? "None" : "Yes"}
+            label="Obligations on the book"
+            value={noDefault ? "Funded" : "Not funded"}
             detail={
               noDefault
-                ? `Every obligation in the window is funded. Cash never reaches zero.`
-                : `An obligation in the window cannot be funded.`
+                ? `Every recorded obligation in the window, including the ${planDays.length} the plan created, is funded.`
+                : `A recorded obligation in the window cannot be funded.`
             }
           />
           <Verdict
@@ -229,7 +241,7 @@ export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
               <tr className="border-t border-slate-100 dark:border-slate-800">
                 <td className="px-2 py-1.5 tabular-nums text-slate-500">d{start - 1}</td>
                 <td className="px-2 py-1.5 text-slate-500">Post-recovery opening balance</td>
-                <td className="px-2 py-1.5 text-right text-slate-400">—</td>
+                <td className="px-2 py-1.5 text-right text-slate-500">—</td>
                 <td className="px-2 py-1.5 text-right font-medium tabular-nums">
                   {money2(echo.opening_balance)}
                 </td>

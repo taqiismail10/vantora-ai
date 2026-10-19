@@ -52,6 +52,12 @@ class ArInvoice(_Model):
     allowed_signatory_role: str = Field(
         default="", description="Who may sign outbound collection text to this buyer"
     )
+    # A drawdown already submitted to a lender is modelled as a deterministic
+    # inflow on its funding day. It is cash in flight, not a receivable: it is
+    # never discountable and never factoring collateral.
+    inflow_kind: Literal["invoice", "expected_funding"] = Field(
+        default="invoice", description="What this inflow is: a customer invoice or an in-flight facility draw"
+    )
 
 
 class ApPayable(_Model):

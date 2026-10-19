@@ -120,6 +120,8 @@ export interface IssueApprovalInput {
   /** The amount the human typed to confirm, cross-checked at verify time. */
   confirmedAmount?: number;
   ttlMs?: number;
+  /** Use a nonce the caller already recorded server-side (see `server/approvals.ts`). */
+  jti?: string;
 }
 
 /** Mint an approval token. In production only the HITL approval route calls this. */
@@ -132,7 +134,7 @@ export function issueApprovalToken(claims: IssueApprovalInput): string {
     planId: claims.planId,
     actorId: claims.actorId,
     payloadDigest: digestPayload(claims.payload),
-    jti: randomUUID(),
+    jti: claims.jti ?? randomUUID(),
     ...(claims.confirmedAmount !== undefined ? { confirmedAmount: claims.confirmedAmount } : {}),
     exp: Date.now() + (claims.ttlMs ?? DEFAULT_TTL_MS),
   };
@@ -404,6 +406,14 @@ export interface InjectionScanResult {
  * Screen untrusted third-party text (invoice memos, supplier emails, OCR output)
  * for instructions aimed at the agent rather than at the human reader.
  */
+/**
+ * Untrusted text is displayed to people, so long digit runs — account and
+ * routing numbers an attacker planted — are masked to their last two digits
+ * before they reach a screen. Detection runs on the raw text; only what is
+ * returned for display is masked.
+ */
+export const maskDigits = (text: string) => text.replace(/\d{5,}/g, (run) => `${"•".repeat(run.length - 2)}${run.slice(-2)}`);
+
 export function detectIndirectPromptInjection(untrustedMemo: string | null | undefined): InjectionScanResult {
   const memo = untrustedMemo ?? "";
   const matches: InjectionMatch[] = [];
@@ -413,8 +423,8 @@ export function detectIndirectPromptInjection(untrustedMemo: string | null | und
     if (hit?.index !== undefined) {
       matches.push({
         name,
-        excerpt: memo.slice(Math.max(0, hit.index - 20), hit.index + hit[0].length + 20).trim(),
-        matched: hit[0],
+        excerpt: maskDigits(memo.slice(Math.max(0, hit.index - 20), hit.index + hit[0].length + 20).trim()),
+        matched: maskDigits(hit[0]),
       });
     }
   }
@@ -423,7 +433,7 @@ export function detectIndirectPromptInjection(untrustedMemo: string | null | und
     injectionDetected: matches.length > 0,
     severity: matches.length === 0 ? "none" : matches.length >= 2 ? "critical" : "suspicious",
     matches,
-    sanitizedMemo: memo.replace(/[\r\n]+/g, " ").slice(0, 500),
+    sanitizedMemo: maskDigits(memo.replace(/[\r\n]+/g, " ").slice(0, 500)),
   };
 }
 
@@ -445,6 +455,27 @@ export interface GateRequest {
   smeProfileId?: string;
   recoveryPlanId?: string;
   actorType?: string;
+  /**
+   * Atomic consume-and-record step for Tier 2, run synchronously after the
+   * token verifies and before anything is awaited. The server's approval
+   * store uses it to burn the nonce and insert the execution row in one
+   * transaction; when it is absent the process-local nonce set is used.
+   */
+  commit?: (claims: ApprovalClaims | null) => { ok: true } | { ok: false; reason: string };
+  /**
+   * The caller holds no token because the approval is a server-held
+   * delegation (the copilot acting on an owner's approval). Only valid with
+   * `commit`, which must find and consume that delegation itself.
+   */
+  delegated?: boolean;
+  /**
+   * Numerical attestation applies to text a model produced. A Tier 2 payload
+   * built by the server from engine output (integer cents, never model text)
+   * has nothing to attest, so the approval service turns the check off for
+   * it; model-proposed arguments never reach the gate as a payload, they are
+   * mapped onto a server-built one first.
+   */
+  attest?: boolean;
 }
 
 export interface GateResult {
@@ -477,7 +508,7 @@ export async function enforcePermissionGate(request: GateRequest): Promise<GateR
     ? detectIndirectPromptInjection(request.untrustedContext)
     : null;
 
-  const numericalIntegrity = request.payload !== undefined
+  const numericalIntegrity = request.payload !== undefined && request.attest !== false
     ? verifyNumericalIntegrity(request.payload, request.quantEngineOutput)
     : null;
 
@@ -492,12 +523,18 @@ export async function enforcePermissionGate(request: GateRequest): Promise<GateR
   } else if (numericalIntegrity && !numericalIntegrity.ok) {
     reason = `numerical integrity failure: ${numericalIntegrity.violations.map((v) => v.message).join("; ")}`;
   } else if (effectiveTier === PERMISSION_TIERS.TIER_2_HITL_APPROVAL) {
-    tokenVerification = verifyApprovalToken(request.userApprovalToken, {
-      operation: request.operation,
-      planId: request.planId,
-      payload: request.payload,
-    });
-    if (tokenVerification.valid && CONSUMED_JTI.has(tokenVerification.claims!.jti)) {
+    if (request.delegated) {
+      tokenVerification = request.commit
+        ? { valid: true, reason: null, claims: null }
+        : { valid: false, reason: "a delegated execution needs a server-held approval", claims: null };
+    } else {
+      tokenVerification = verifyApprovalToken(request.userApprovalToken, {
+        operation: request.operation,
+        planId: request.planId,
+        payload: request.payload,
+      });
+    }
+    if (tokenVerification.valid && !request.commit && CONSUMED_JTI.has(tokenVerification.claims!.jti)) {
       // One approval, one execution. A re-presented token is a replay.
       tokenVerification = {
         valid: false,
@@ -506,9 +543,19 @@ export async function enforcePermissionGate(request: GateRequest): Promise<GateR
       };
     }
     if (tokenVerification.valid) {
-      CONSUMED_JTI.add(tokenVerification.claims!.jti);
+      // Synchronous on purpose: nothing awaits between the check and the burn.
+      const committed = request.commit ? request.commit(tokenVerification.claims) : null;
+      if (committed && !committed.ok) {
+        tokenVerification = { valid: false, reason: committed.reason, claims: tokenVerification.claims };
+      } else if (!request.commit) {
+        CONSUMED_JTI.add(tokenVerification.claims!.jti);
+      }
+    }
+    if (tokenVerification.valid) {
       decision = "ALLOWED";
-      reason = `human approval verified for ${request.operation}`;
+      reason = request.delegated
+        ? `owner-delegated approval verified for ${request.operation}`
+        : `human approval verified for ${request.operation}`;
     } else {
       reason = `TIER_2_HITL_APPROVAL blocked: ${tokenVerification.reason}`;
     }

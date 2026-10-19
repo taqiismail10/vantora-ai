@@ -17,9 +17,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DashboardState } from "@/lib/dashboard-state";
-import { deferralDays, deferralFeePct, pledgeableAr } from "@/lib/quant-client";
+import { deferralDays, deferralFeePct, pledgeableAr, uncertaintyWindows } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
+import { dayDate } from "./dates";
 import { FanChart } from "./fan-chart";
 import { DeterministicBadge, KpiCard, Metric, money, money2, pct, SectionHeading } from "./primitives";
 
@@ -56,9 +57,9 @@ const ARCHETYPE_LABEL: Record<string, string> = {
 };
 
 function reliabilityTone(score: number) {
-  if (score >= 0.9) return "text-emerald-600 dark:text-emerald-400";
-  if (score >= 0.75) return "text-amber-600 dark:text-amber-400";
-  return "text-rose-600 dark:text-rose-400";
+  if (score >= 0.9) return "text-emerald-700 dark:text-emerald-400";
+  if (score >= 0.75) return "text-amber-700 dark:text-amber-400";
+  return "text-rose-700 dark:text-rose-400";
 }
 
 /** Two mutually exclusive states, shown as one control rather than a checkbox. */
@@ -86,7 +87,7 @@ function Segmented({
             "rounded px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition-colors disabled:opacity-60",
             option.value === value
               ? "bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-slate-100"
-              : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
+              : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
           )}
         >
           {option.label}
@@ -114,7 +115,7 @@ function StruckMemo({ text, spans }: { text: string; spans: string[] }) {
         typeof part === "string" ? (
           <span key={index}>{part}</span>
         ) : (
-          <span key={index} className="font-semibold text-rose-600 line-through decoration-rose-500 dark:text-rose-400">
+          <span key={index} className="font-semibold text-rose-700 line-through decoration-rose-500 dark:text-rose-400">
             {part.hit}
           </span>
         ),
@@ -126,6 +127,7 @@ function StruckMemo({ text, spans }: { text: string; spans: string[] }) {
 export function LiquidityRadar({ data }: { data: DashboardState }) {
   const [showRecovery, setShowRecovery] = useState(false);
   const [showQuantMath, setShowQuantMath] = useState(false);
+  const [showTable, setShowTable] = useState(false);
   const [openMemo, setOpenMemo] = useState<string | null>(null);
   const { forecast, optimization, state, memos } = data;
   // The correlation dial lives in the header stress drawer now, beside the
@@ -140,14 +142,21 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
   const meanSpread =
     forecast.p90_trajectory.reduce((sum, v, i) => sum + (v - forecast.p10_trajectory[i]), 0) /
     forecast.horizon_days;
+  const windows = uncertaintyWindows(forecast);
+  const crunchCoincides =
+    forecast.p10_trajectory[crunchDay - 1] === forecast.p90_trajectory[crunchDay - 1];
 
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          label="Current cash"
+          label="Ledger cash (as-of date)"
           value={money(state.current_cash)}
-          sublabel={`Minimum safe buffer ${money(state.minimum_safe_buffer)}`}
+          sublabel={
+            data.execution.has_position
+              ? `Buffer ${money(state.minimum_safe_buffer)} · sandbox account now ${money(data.execution.account.cash_cents / 100)} after settled actions`
+              : `Minimum safe buffer ${money(state.minimum_safe_buffer)}`
+          }
           tone="neutral"
           footnote={<DeterministicBadge method="Ledger" />}
         />
@@ -173,7 +182,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
         <KpiCard
           label="Shortfall probability"
           value={pct(forecast.shortfall_probability, 1)}
-          sublabel={`of ${forecast.n_simulations.toLocaleString()} trajectories breach the buffer (seed ${forecast.seed})`}
+          sublabel={`of ${forecast.n_simulations.toLocaleString()} simulated trajectories breach the buffer (seed ${forecast.seed}) — under the model's assumptions, not a guarantee`}
           tone="neutral"
           footnote={<DeterministicBadge method={`Seeded · reproducible`} />}
         />
@@ -198,7 +207,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                 {
                   value: "plan",
                   label: optimization.optimal_plan.feasible
-                    ? `With the ${money(optimization.optimal_plan.total_cost)} plan`
+                    ? `With the plan (${money2(data.cost_breakdown.cash_cents / 100)} cash)`
                     : "No feasible plan",
                 },
               ]}
@@ -215,27 +224,56 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
               size="sm"
               variant="outline"
               className="text-[11px]"
+              aria-pressed={showQuantMath}
               onClick={() => setShowQuantMath((value) => !value)}
             >
-              {showQuantMath ? "Hide" : "Show"} P90 &amp; quant math
+              {showQuantMath ? "Hide" : "Show"} model details
             </Button>
-
-            <Badge
+            <Button
+              size="sm"
               variant="outline"
-              className="ml-auto gap-1.5 font-mono text-[10px]"
-              title="Systemic correlation between buyer payment delays. Above zero the whole receivables book slips together. Set it in the header stress drawer."
+              className="text-[11px]"
+              aria-pressed={showTable}
+              aria-controls="fan-chart-table"
+              onClick={() => setShowTable((value) => !value)}
             >
-              <Waves className="size-3" />
-              ρ = {rho.toFixed(1)}
-              {rho > 0 ? " · correlated" : " · independent"}
-            </Badge>
+              {showTable ? "Hide" : "View"} as table
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
           <FanChart data={data} showRecovery={showRecovery} showQuantMath={showQuantMath} />
 
+          {showTable ? <ForecastTable data={data} showRecovery={showRecovery} /> : null}
+
           {showQuantMath ? (
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
+              <span
+                className="inline-flex items-center gap-1.5 font-mono"
+                title="Systemic correlation between buyer payment delays. Above zero the whole receivables book slips together. Set it in the header stress drawer."
+              >
+                <Waves className="size-3" aria-hidden />
+                ρ = {rho.toFixed(1)}
+                {rho > 0 ? " · correlated" : " · independent"}
+              </span>
+              {crunchCoincides ? (
+                <span>
+                  P10 = P50 = P90 on day {crunchDay}: at least 80% of runs end that day on exactly{" "}
+                  {money(forecast.p10_trajectory[crunchDay - 1])}, because in those runs exactly the same receivables have
+                  arrived by then. Some runs do differ — an invoice early or late — but fewer than 10% each way, so the
+                  percentiles cannot show them. That is certainty inside the model (authored payment-delay
+                  assumptions, fixed bills, no new sales), not a guarantee about real buyers.
+                </span>
+              ) : null}
+              <span>
+                Uncertainty sits on{" "}
+                {windows.length
+                  ? windows
+                      .map((w) => `days ${w.from}–${w.to} (widest ${money(w.max_spread)} on day ${w.max_day})`)
+                      .join(" and ")
+                  : "no day: every run gives the same path"}
+                : that is when receivable timing changes the outcome.
+              </span>
               <span>
                 Mean P90−P10 spread{" "}
                 <span className="font-medium tabular-nums text-slate-900 dark:text-slate-100">
@@ -249,7 +287,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                   {money(forecast.p10_ci_95[0])} … {money(forecast.p10_ci_95[1])}
                 </span>
                 {forecast.p10_ci_95[0] === forecast.p10_ci_95[1] ? (
-                  <span className="text-slate-400"> (zero width — no invoice can land in that window)</span>
+                  <span className="text-slate-600"> (zero width — no invoice can land in that window)</span>
                 ) : null}
               </span>
               <span className="font-mono">
@@ -268,7 +306,10 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* Stacked until there is room for every column of both ledgers; side by
+          side at 1536px+ so "Early pay" and the default penalty are never
+          hidden behind an internal scroll. */}
+      <div className="grid gap-4 2xl:grid-cols-2">
         <Card className="border-slate-200 dark:border-slate-800">
           <CardHeader>
             <SectionHeading
@@ -306,7 +347,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                     <TableRow key={invoice.id} className={cn(inPlan && "bg-emerald-50/60 dark:bg-emerald-950/20")}>
                       <TableCell className="font-medium">
                         <div className="whitespace-nowrap">{invoice.id}</div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">{invoice.customer_name}</div>
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400">{invoice.customer_name}</div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{money(invoice.amount)}</TableCell>
                       <TableCell className="text-right tabular-nums">d{invoice.due_day}</TableCell>
@@ -332,7 +373,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                         >
                           {MATCH_BADGE[invoice.match_status ?? "MATCH_CLEAN"]?.label ?? invoice.match_status}
                         </Badge>
-                        <div className="mt-0.5 flex flex-col gap-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                        <div className="mt-0.5 flex flex-col gap-0.5 text-[10px] text-slate-600 dark:text-slate-400">
                           {(invoice.revenue_concentration_pct ?? 0) >= 0.3 ? (
                             <span
                               className="font-medium text-amber-700 dark:text-amber-400"
@@ -368,12 +409,12 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             blocked by match
                           </span>
                         ) : (
-                          <span className="text-slate-400">—</span>
+                          <span className="text-slate-600">—</span>
                         )}
                       </TableCell>
                       <TableCell>
                         {!memo ? (
-                          <span className="inline-flex items-center gap-1 text-slate-400">
+                          <span className="inline-flex items-center gap-1 text-slate-600">
                             <ShieldCheck className="size-3" /> none
                           </span>
                         ) : memo.quarantined ? (
@@ -381,13 +422,13 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             type="button"
                             onClick={() => setOpenMemo(expanded ? null : invoice.id)}
                             aria-expanded={expanded}
-                            className="inline-flex items-center gap-1 rounded font-medium text-rose-600 underline decoration-dotted underline-offset-2 hover:text-rose-700 dark:text-rose-400"
+                            className="inline-flex items-center gap-1 rounded font-medium text-rose-700 underline decoration-dotted underline-offset-2 hover:text-rose-700 dark:text-rose-400"
                           >
                             <ShieldAlert className="size-3" /> quarantined
                             <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} />
                           </button>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
                             <ShieldCheck className="size-3" /> clean
                           </span>
                         )}
@@ -464,14 +505,14 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                     >
                       <TableCell className="font-medium">
                         <div className="whitespace-nowrap">{payable.id}</div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">{payable.supplier_name}</div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400">{payable.supplier_name}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-600 dark:text-slate-400">
                           <span className="font-mono">
                             {ARCHETYPE_LABEL[payable.supplier_archetype ?? "OVERHEAD"]}
                           </span>
                           {payable.line_stop_risk ? (
                             <span
-                              className="font-medium text-rose-600 dark:text-rose-400"
+                              className="font-medium text-rose-700 dark:text-rose-400"
                               title="Not deferrable at any price: withholding payment stops the line."
                             >
                               · line stop
@@ -491,7 +532,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                       <TableCell
                         className={cn(
                           "text-right tabular-nums",
-                          payable.due_day === crunchDay && "font-semibold text-rose-600 dark:text-rose-400",
+                          payable.due_day === crunchDay && "font-semibold text-rose-700 dark:text-rose-400",
                         )}
                       >
                         d{payable.due_day}
@@ -511,7 +552,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             ) : null}
                             {payable.credit_insured_by ? (
                               <div
-                                className="text-[10px] text-slate-400"
+                                className="text-[10px] text-slate-600"
                                 title={`${payable.credit_insured_by} withdraws cover past ${payable.insurance_revocation_day_cap ?? 30} days, which converts the account to cash-in-advance and triggers bureau reporting.`}
                               >
                                 {payable.credit_insured_by} cap {payable.insurance_revocation_day_cap ?? 30}d
@@ -519,7 +560,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             ) : null}
                           </>
                         ) : (
-                          <span className="text-slate-400">
+                          <span className="text-slate-600">
                             {payable.is_payroll ? "statutory" : "fixed"}
                           </span>
                         )}
@@ -530,11 +571,11 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                       <TableCell className="text-right tabular-nums">{pct(payable.late_fee_pct ?? 0, 1)}</TableCell>
                       <TableCell>
                         {payable.is_critical ? (
-                          <span className="inline-flex items-center gap-1 font-medium text-rose-600 dark:text-rose-400">
+                          <span className="inline-flex items-center gap-1 font-medium text-rose-700 dark:text-rose-400">
                             <AlertTriangle className="size-3" /> {money(payable.default_penalty ?? 0)}
                           </span>
                         ) : (
-                          <span className="text-slate-400">—</span>
+                          <span className="text-slate-600">—</span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -552,7 +593,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
             <CardTitle className="flex items-center gap-2 text-sm text-rose-700 dark:text-rose-300">
               <ShieldAlert className="size-4" /> Quarantined invoice memos
             </CardTitle>
-            <CardDescription className="text-xs">
+            <CardDescription className="text-xs text-slate-600 dark:text-slate-400">
               Screened before any model sees them. The raw text never leaves the API route; what follows is the
               sanitised excerpt with the patterns that matched.
             </CardDescription>
@@ -587,7 +628,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
         </Card>
       ) : null}
 
-      <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+      <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
         Totals: {money2(wc.total_ar_outstanding)} AR against {money2(wc.total_ap_due)} AP, average daily burn{" "}
         {money2(wc.average_daily_burn)}.
         {/* The borrowing base is not the AR balance. A receivable the buyer's
@@ -603,6 +644,44 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
           </>
         ) : null}
       </p>
+    </div>
+  );
+}
+
+/** The fan chart's numbers, for anyone who cannot or would rather not read a chart. */
+function ForecastTable({ data, showRecovery }: { data: DashboardState; showRecovery: boolean }) {
+  const { forecast } = data;
+  return (
+    <div id="fan-chart-table" className="mt-3 max-h-80 overflow-auto rounded-md border border-slate-200 dark:border-slate-800">
+      <table className="w-full text-[11px]">
+        <caption className="sr-only">Projected daily cash, P10 / P50 / P90, for the 30-day horizon</caption>
+        <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900">
+          <tr>
+            <th scope="col" className="px-2 py-1.5 text-left font-medium">Day</th>
+            <th scope="col" className="px-2 py-1.5 text-left font-medium">Date</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">P10 (late payers)</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">P50 (typical)</th>
+            <th scope="col" className="px-2 py-1.5 text-right font-medium">P90</th>
+            {showRecovery ? <th scope="col" className="px-2 py-1.5 text-right font-medium">P10 with plan</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {forecast.p10_trajectory.map((p10, index) => (
+            <tr key={index} className="border-t border-slate-100 dark:border-slate-800">
+              <td className="px-2 py-1 tabular-nums">{index + 1}</td>
+              <td className="px-2 py-1">{dayDate(data.scenario.as_of_date, index + 1)}</td>
+              <td className={cn("px-2 py-1 text-right tabular-nums", p10 < data.state.minimum_safe_buffer && "font-medium text-rose-700 dark:text-rose-300")}>
+                {money(p10)}
+              </td>
+              <td className="px-2 py-1 text-right tabular-nums">{money(forecast.p50_trajectory[index])}</td>
+              <td className="px-2 py-1 text-right tabular-nums">{money(forecast.p90_trajectory[index])}</td>
+              {showRecovery ? (
+                <td className="px-2 py-1 text-right tabular-nums">{money(data.post_recovery_p10_trajectory[index])}</td>
+              ) : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -45,6 +45,8 @@ export interface ArInvoiceInput {
   msa_governed_terms?: string;
   terms_conflict_note?: string;
   allowed_signatory_role?: string;
+  /** An in-flight facility draw modelled as an inflow. Never discountable, never collateral. */
+  inflow_kind?: "invoice" | "expected_funding";
 }
 
 export interface ApPayableInput {
@@ -238,6 +240,28 @@ export async function engineHealth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Where the simulated outcomes actually differ: contiguous days on which the
+ * P90-P10 band is open, with the widest point of each. A day outside every
+ * window has P10 = P50 = P90, which means at least 80% of runs end that day on
+ * exactly the same balance; the runs that differ are fewer than 10% on each
+ * side, so the percentiles cannot show them.
+ */
+export function uncertaintyWindows(forecast: ForecastResult): { from: number; to: number; max_spread: number; max_day: number }[] {
+  const windows: { from: number; to: number; max_spread: number; max_day: number }[] = [];
+  forecast.p90_trajectory.forEach((p90, i) => {
+    const spread = Math.round((p90 - forecast.p10_trajectory[i]) * 100) / 100;
+    if (spread <= 0) return;
+    const day = i + 1;
+    const last = windows.at(-1);
+    if (last && last.to === day - 1) {
+      last.to = day;
+      if (spread > last.max_spread) Object.assign(last, { max_spread: spread, max_day: day });
+    } else windows.push({ from: day, to: day, max_spread: spread, max_day: day });
+  });
+  return windows;
 }
 
 /**
@@ -516,7 +540,7 @@ const MATCH_EXCEPTIONS = new Set<string>(["QTY_VARIANCE", "PRICE_VARIANCE"]);
 
 export const pledgeableAr = (state: SmeFinancialState): number =>
   state.invoices_ar
-    .filter((i) => !MATCH_EXCEPTIONS.has(i.match_status ?? "MATCH_CLEAN"))
+    .filter((i) => !MATCH_EXCEPTIONS.has(i.match_status ?? "MATCH_CLEAN") && (i.inflow_kind ?? "invoice") === "invoice")
     .reduce((sum, i) => sum + i.amount, 0);
 
 export function rankFinancingOptions(

@@ -29,6 +29,8 @@ import type { PermissionTier } from "@/lib/security/permission-gate";
 import type { RecoveryPlanResult } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
+import { StatusChip } from "./execution-queue";
+
 import { CounterpartyFallbacks, EchoSolvencyCheck, PLAN_B_ANCHOR, PlanBJumpHint } from "./plan-resilience";
 import {
   DeterministicBadge,
@@ -96,8 +98,8 @@ function PlanCard({
   const risk = riskScore(data, plan);
   const apr = impliedApr(plan.total_cost, plan.cash_raised);
   const costTone = {
-    good: "text-emerald-600 dark:text-emerald-400",
-    warn: "text-amber-600 dark:text-amber-400",
+    good: "text-emerald-700 dark:text-emerald-400",
+    warn: "text-amber-700 dark:text-amber-400",
     bad: "text-rose-600 dark:text-rose-400",
   }[tone];
   const costRatio = plan.cash_raised > 0 ? plan.total_cost / plan.cash_raised : 0;
@@ -129,7 +131,7 @@ function PlanCard({
         <CardDescription className="text-xs">{caption}</CardDescription>
         {plan.breaches_statutory_payroll ? <PayrollBreachCallout data={data} /> : null}
         {savings ? (
-          <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{savings}</div>
+          <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{savings}</div>
         ) : null}
         <div className="flex flex-wrap gap-1.5 pt-1">
           <DeterministicBadge method={method} />
@@ -182,16 +184,27 @@ function PlanCard({
                   ↳ {COUNTERPARTY_ASSUMPTION[action.kind]}
                 </div>
               ) : null}
+              {recommended ? <PlanActionStatus data={data} kind={action.kind} target={action.target_id} /> : null}
             </div>
           ))}
         </div>
         <p className="text-[11px] text-slate-500 dark:text-slate-400">{plan.notes}</p>
         {recommended && onApprove && plan.feasible ? (
           <div className="flex flex-wrap items-center gap-3">
-            <Button size="sm" onClick={onApprove} className="text-[11px]">
-              Approve in the action center
-              <ArrowRight className="size-3.5" />
+            <Button
+              size="sm"
+              onClick={onApprove}
+              disabled={!data.viewer.capabilities.includes("approve") || !data.execution.bundle}
+              className="text-[11px]"
+            >
+              Approve this plan
+              <ArrowRight className="size-3.5" aria-hidden />
             </Button>
+            {!data.viewer.capabilities.includes("approve") ? (
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Only the OWNER can approve.</span>
+            ) : !data.execution.bundle ? (
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Already submitted — track it in the action center.</span>
+            ) : null}
             <PlanBJumpHint />
           </div>
         ) : null}
@@ -255,7 +268,7 @@ function ProcrastinationCurve({ data }: { data: DashboardState }) {
             <div key={point.day_waited} className="grid gap-1 sm:grid-cols-[11rem_1fr_7rem] sm:items-center">
               <div className="text-xs font-medium tabular-nums">
                 {point.label}
-                <span className="ml-1 font-normal text-slate-400">{point.days_remaining}d left</span>
+                <span className="ml-1 font-normal text-slate-500">{point.days_remaining}d left</span>
               </div>
               <div className="h-5 w-full overflow-hidden rounded-sm bg-slate-100 dark:bg-slate-900">
                 <div
@@ -341,9 +354,9 @@ export function RecoveryOptimizer({
           caption={`Minimum-cost mix closing the ${money(o.required_cash)} day-${o.crunch_day} gap.`}
           savings={
             o.optimal_plan.feasible
-              ? `Saves ${money2(o.savings_vs_naive)} vs naive borrowing · ${money2(
-                  o.savings_vs_do_nothing,
-                )} vs doing nothing`
+              ? `${money2(data.cost_breakdown.cash_cents / 100)} cash + ${money2(
+                  data.cost_breakdown.risk_cents / 100,
+                )} modelled relationship risk · ${money2(o.savings_vs_naive)} below naive borrowing on the same objective`
               : undefined
           }
           method={
@@ -369,13 +382,15 @@ export function RecoveryOptimizer({
           data={data}
           plan={o.baseline_do_nothing_plan}
           title="Do nothing"
-          caption="Late fees on what goes unpaid plus the default penalties on critical suppliers."
+          caption="Late fees plus default penalties — penalty sizes are scenario assumptions, not quotes. Shown for contrast, not as an option."
           method="Penalty schedule"
           tier="TIER_0_AUTO_READ"
           tone="bad"
           icon={<TrendingDown className="size-4" />}
         />
       </div>
+
+      <BenchmarkNote data={data} />
 
       <div id={PLAN_B_ANCHOR} className="flex flex-col gap-4">
         <CounterpartyFallbacks data={data} />
@@ -440,11 +455,11 @@ export function RecoveryOptimizer({
                   <TableRow
                     key={option.id}
                     className={cn(
-                      !option.eligible && "opacity-70",
+                      !option.eligible && "bg-slate-50/60 dark:bg-slate-900/40",
                       used && "bg-emerald-50/60 dark:bg-emerald-950/20",
                     )}
                   >
-                    <TableCell className="tabular-nums text-slate-400">{option.rank}</TableCell>
+                    <TableCell className="tabular-nums text-slate-500">{option.rank}</TableCell>
                     <TableCell className="font-medium">
                       <div className="whitespace-nowrap">{option.provider}</div>
                       <div className="text-[11px] text-slate-500 dark:text-slate-400">{option.id}</div>
@@ -485,7 +500,7 @@ export function RecoveryOptimizer({
                     <TableCell className="text-right tabular-nums">{money2(option.effective_cost_30d)}</TableCell>
                     <TableCell className="min-w-[18rem]">
                       {option.eligible ? (
-                        <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
                           <BadgeCheck className="size-3" />
                           {used ? `matched · ${money2(used.cash_impact)} drawn` : "eligible"}
                         </span>
@@ -519,5 +534,41 @@ export function RecoveryOptimizer({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** The status of this plan action in the sandbox, if it has gone anywhere yet. */
+function PlanActionStatus({ data, kind, target }: { data: DashboardState; kind: string; target: string }) {
+  const record = data.execution.actions.find((a) => a.kind === kind && a.target_id === target);
+  if (!record) return null;
+  return (
+    <div className="mt-1.5">
+      <StatusChip status={record.status} kind={record.kind} />
+    </div>
+  );
+}
+
+/**
+ * What the solver is worth here, measured rather than asserted: the MILP and
+ * the greedy mirror were run on every shipped scenario
+ * (`scripts/benchmark-milp-vs-greedy.ts`) and the result is quoted as is.
+ */
+function BenchmarkNote({ data }: { data: DashboardState }) {
+  const b = data.benchmark;
+  if (!b) return null;
+  return (
+    <details className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+      <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-300">
+        Model details: MILP versus a greedy heuristic, measured
+      </summary>
+      <p className="mt-1.5 leading-relaxed">
+        Across all {b.scenarios} shipped scenario and stress-dial combinations, the HiGHS MILP and a greedy
+        cost-per-dollar heuristic produced the <strong>same cost in {b.identical} of {b.identical + b.milp_cheaper + b.greedy_cheaper}</strong>{" "}
+        feasible cases and agreed on all {b.both_infeasible} infeasible ones ({b.milp_cheaper} cases where the MILP
+        was cheaper). On this data the MILP does not find cheaper plans; what it adds is a proof that the plan is
+        optimal and a place where hard constraints — payroll is never deferred, the relationship-risk budget, the
+        trade-credit insurance cap — are enforced rather than hoped for. Benchmark run {b.run_at.slice(0, 10)}.
+      </p>
+    </details>
   );
 }
