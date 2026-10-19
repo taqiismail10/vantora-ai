@@ -5,6 +5,9 @@
  *   { action: "approve",     operation }           mint an HMAC approval token (human)
  *   { action: "execute",     tool, input?, userApprovalToken? }
  *   { action: "red_team" }                         run the live attack suite
+ *   { action: "custom_security_probe", customMemo?, customDraftText? }
+ *                                                  run the two screens against
+ *                                                  caller-supplied text, read-only
  *   { action: "verify_chain" }                     re-verify the SHA-256 ledger
  *
  * Nothing here trusts the caller's tier claim: `runCopilotTool` hands every
@@ -25,12 +28,15 @@ import { readChain, verifyChain } from "@/lib/sandbox/execution-logger";
 import { SMART_JEANS_INVOICE_MEMOS, seedSandboxDataset } from "@/lib/sandbox/seed-data";
 import {
   classifyOperation,
+  detectIndirectPromptInjection,
   enforcePermissionGate,
   issueApprovalToken,
   verifyApprovalToken,
+  verifyNumericalIntegrity,
+  PERMISSION_TIERS,
 } from "@/lib/security/permission-gate";
 
-const HUMAN_ACTOR = "cfo@apex-manufacturing.test";
+const HUMAN_ACTOR = "cfo@smartjeans.test";
 const TIER_2_OPERATIONS = ["execute_recovery_plan", "send_supplier_deferral_email", "accept_financing_offer"];
 
 /** The dashboard only shows the gate-relevant half of a tool run. */
@@ -179,6 +185,68 @@ async function redTeam(ctx: CopilotContext) {
   };
 }
 
+/** Longest text either screen will accept. Generous for a memo, bounded for us. */
+const PROBE_MAX_CHARS = 4_000;
+
+/**
+ * Run both screens against text the caller supplied.
+ *
+ * Read-only by construction: it calls the two pure analysis functions directly
+ * instead of going through `enforcePermissionGate`, so probing appends nothing
+ * to the hash chain. That is deliberate on two counts — a visitor poking at the
+ * scanner must not be able to grow the audit ledger, and the genesis chain
+ * stays byte-stable for verification.
+ *
+ * The raw text is never logged or persisted. It is scanned, summarised, and
+ * dropped when the response is written.
+ */
+function customSecurityProbe(
+  ctx: CopilotContext,
+  customMemo: unknown,
+  customDraftText: unknown,
+) {
+  const clean = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.slice(0, PROBE_MAX_CHARS) : null;
+  const memoText = clean(customMemo);
+  const draftText = clean(customDraftText);
+
+  if (!memoText && !draftText) {
+    return { error: "supply customMemo, customDraftText, or both" as string };
+  }
+
+  let memo = null;
+  if (memoText) {
+    const scan = detectIndirectPromptInjection(memoText);
+    memo = {
+      quarantined: scan.injectionDetected,
+      severity: scan.severity,
+      // Injected instructions in untrusted text escalate the operation that
+      // read them, which is the behaviour this reports rather than asserts.
+      tier: scan.injectionDetected
+        ? PERMISSION_TIERS.TIER_3_PROHIBITED
+        : PERMISSION_TIERS.TIER_0_AUTO_READ,
+      matched_patterns: scan.matches.map((m) => m.name),
+      matched_text: scan.matches.map((m) => m.matched),
+      sanitized_excerpt: scan.sanitizedMemo,
+      truncated: typeof customMemo === "string" && customMemo.length > PROBE_MAX_CHARS,
+    };
+  }
+
+  let numbers = null;
+  if (draftText) {
+    const result = verifyNumericalIntegrity(draftText, attestationBundle(ctx));
+    numbers = {
+      ok: result.ok,
+      checkedDollarFigures: result.checkedDollarFigures,
+      checkedPercentages: result.checkedPercentages,
+      violations: result.violations,
+      truncated: typeof customDraftText === "string" && customDraftText.length > PROBE_MAX_CHARS,
+    };
+  }
+
+  return { memo, numbers, plan_id: ctx.planId };
+}
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     action?: string;
@@ -187,6 +255,9 @@ export async function POST(request: Request) {
     input?: Record<string, unknown>;
     userApprovalToken?: string;
     actorId?: string;
+    /** Judge-supplied text for the read-only security probe. Untrusted. */
+    customMemo?: unknown;
+    customDraftText?: unknown;
     /** The figure the human typed in the approval dialog, when one asked. */
     confirmedAmount?: number;
   };
@@ -262,6 +333,12 @@ export async function POST(request: Request) {
     case "red_team":
       return NextResponse.json({ action: "red_team", ...(await redTeam(ctx)) });
 
+    case "custom_security_probe": {
+      const probe = customSecurityProbe(ctx, body.customMemo, body.customDraftText);
+      if ("error" in probe) return NextResponse.json(probe, { status: 400 });
+      return NextResponse.json({ action: "custom_security_probe", ...probe });
+    }
+
     case "verify_chain": {
       const entries = readChain();
       return NextResponse.json({ action: "verify_chain", verification: verifyChain(entries), entries });
@@ -269,7 +346,10 @@ export async function POST(request: Request) {
 
     default:
       return NextResponse.json(
-        { error: `unknown action "${body.action ?? ""}"`, expected: ["draft", "execute", "approve", "red_team", "verify_chain"] },
+        {
+          error: `unknown action "${body.action ?? ""}"`,
+          expected: ["draft", "execute", "approve", "red_team", "custom_security_probe", "verify_chain"],
+        },
         { status: 400 },
       );
   }

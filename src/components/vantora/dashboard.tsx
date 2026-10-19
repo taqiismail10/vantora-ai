@@ -148,7 +148,7 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
       </main>
 
       <Dialog open={redTeam !== null} onOpenChange={(open) => (open ? null : setRedTeam(null))}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               {redTeam?.summary.passed ? (

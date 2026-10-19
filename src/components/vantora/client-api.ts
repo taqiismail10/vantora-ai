@@ -66,6 +66,32 @@ export const requestApproval = (
 
 export const runRedTeamDrill = () => post<RedTeamResult>("/api/action", { action: "red_team" });
 
+/** One read-only run of both security screens over caller-supplied text. */
+export interface SecurityProbeResult {
+  action: "custom_security_probe";
+  memo: {
+    quarantined: boolean;
+    severity: "none" | "suspicious" | "critical";
+    tier: string;
+    matched_patterns: string[];
+    matched_text: string[];
+    sanitized_excerpt: string;
+    truncated: boolean;
+  } | null;
+  numbers: {
+    ok: boolean;
+    checkedDollarFigures: number[];
+    checkedPercentages: number[];
+    violations: { kind: string; value: number; nearestEngineValue: number | null; message: string }[];
+    truncated: boolean;
+  } | null;
+  plan_id: string;
+}
+
+/** Appends nothing to the audit chain: the probe is pure analysis. */
+export const probeSecurity = (input: { customMemo?: string; customDraftText?: string }) =>
+  post<SecurityProbeResult>("/api/action", { action: "custom_security_probe", ...input });
+
 export const verifyAuditChain = () =>
   post<{ verification: DashboardState["audit"]["verification"]; entries: DashboardState["audit"]["entries"] }>(
     "/api/action",

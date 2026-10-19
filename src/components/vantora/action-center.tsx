@@ -23,9 +23,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ActionResult, CopilotTurnResponse, DashboardState } from "@/lib/dashboard-state";
+import type { ArInvoiceInput } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
+import { BuyerPortalPreview } from "./buyer-portal";
 import { askCopilotQuestion, requestApproval, runTool } from "./client-api";
 import { AttestationPopover } from "./attestation";
 import { AttestedBadge, DecisionBadge, DeterministicBadge, money, money2, pct, SectionHeading, TierBadge } from "./primitives";
@@ -34,6 +37,12 @@ interface Draft {
   tool: string;
   title: string;
   result: ActionResult;
+  /**
+   * Set only for a genuine early-payment offer. The same tool also drafts the
+   * GR/IR reconciliation note, which has no settlement to preview — so the
+   * modal keys off the invoice, not off the tool name.
+   */
+  portal?: ArInvoiceInput;
 }
 
 /** One Tier 2 action, with everything the approval dialog has to disclose. */
@@ -138,10 +147,15 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
     }
   };
 
-  const stageDraft = (tool: string, title: string, input: Record<string, unknown>) =>
+  const stageDraft = (
+    tool: string,
+    title: string,
+    input: Record<string, unknown>,
+    portal?: ArInvoiceInput,
+  ) =>
     guard(tool, async () => {
       const result = await runTool(tool, input);
-      const draft = { tool, title, result };
+      const draft = { tool, title, result, portal };
       setDrafts((current) => [draft, ...current.filter((d) => d.tool !== tool)]);
       setPreview(draft);
     });
@@ -170,6 +184,11 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
     ? data.state.payables_ap.find((p) => p.id === deferral.target_id)
     : undefined;
   const crunchDay = data.optimization.crunch_day;
+  const discountInvoice = discount
+    ? data.state.invoices_ar.find((i) => i.id === discount.target_id)
+    : undefined;
+  const payrollLockDay =
+    data.state.payables_ap.find((p) => p.is_payroll)?.payroll_lock_day ?? null;
 
   const tier2: Tier2Entry[] = ([
     {
@@ -372,9 +391,12 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
                 size="sm"
                 disabled={busy !== null}
                 onClick={() =>
-                  stageDraft("draft_customer_discount_offer", `Early-pay offer · ${discount.target_id}`, {
-                    invoice_id: discount.target_id,
-                  })
+                  stageDraft(
+                    "draft_customer_discount_offer",
+                    `Early-pay offer · ${discount.target_id}`,
+                    { invoice_id: discount.target_id },
+                    discountInvoice,
+                  )
                 }
                 className="justify-start text-[11px]"
               >
@@ -524,7 +546,7 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
           }
         }}
       >
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           {approving ? (
             <ApprovalDialogBody
               entry={approving}
@@ -539,16 +561,45 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
       </Dialog>
 
       <Dialog open={preview !== null} onOpenChange={(open) => (open ? null : setPreview(null))}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-sm">{preview?.title}</DialogTitle>
             <DialogDescription className="text-xs">
               Tier 1 draft · {preview?.result.decision} · audit seq #{preview?.result.seq}. Nothing has been sent.
             </DialogDescription>
           </DialogHeader>
-          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
-            {renderDraft(preview?.result.output)}
-          </pre>
+          {preview?.portal ? (
+            <Tabs defaultValue="email">
+              <TabsList className="h-9 w-full justify-start">
+                <TabsTrigger value="email" className="shrink-0 text-[11px]">
+                  Outbound email draft
+                </TabsTrigger>
+                <TabsTrigger value="portal" className="shrink-0 text-[11px]">
+                  Buyer portal preview
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="email" className="flex flex-col gap-2 pt-1">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Controller signatory · no distress language · {preview.portal.allowed_signatory_role}
+                </p>
+                <DraftBody output={preview.result.output} />
+              </TabsContent>
+              <TabsContent value="portal" className="flex flex-col gap-2 pt-1">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  What {preview.portal.customer_name}&apos;s treasury team sees behind the magic link.
+                </p>
+                <div className="max-h-[52vh] overflow-auto pr-1">
+                  <BuyerPortalPreview
+                    invoice={preview.portal}
+                    crunchDay={crunchDay}
+                    payrollLockDay={payrollLockDay}
+                  />
+                </div>
+              </TabsContent>
+            </Tabs>
+          ) : (
+            <DraftBody output={preview?.result.output} />
+          )}
         </DialogContent>
       </Dialog>
     </div>
@@ -667,6 +718,14 @@ function ApprovalDialogBody({
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+function DraftBody({ output }: { output: unknown }) {
+  return (
+    <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
+      {renderDraft(output)}
+    </pre>
   );
 }
 

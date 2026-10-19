@@ -13,6 +13,7 @@ import type {
   ProcrastinationPoint,
   SmeFinancialState,
 } from "./quant-client";
+import type { CounterpartyFallback, EchoCheck } from "./recovery-scenarios";
 import type { NumericalIntegrityResult, PermissionTier } from "./security/permission-gate";
 import type { ScenarioPreset, SeedResult } from "./sandbox/seed-data";
 import type { StressControls } from "./stress-controls";
@@ -60,6 +61,10 @@ export interface DashboardState {
   post_recovery_p10_trajectory: number[];
   /** What the same plan costs at each decision horizon before the crunch. */
   procrastination_curve: ProcrastinationPoint[];
+  /** Plan B for each key counterparty refusing. Empty when the plan has no offers in it. */
+  counterparty_fallbacks: CounterpartyFallback[];
+  /** Does the day-14 fix become a day-31 problem? Null when there is no plan. */
+  post_crunch_echo_check: EchoCheck | null;
   memos: MemoScreen[];
   audit: { entries: AuditLogEntry[]; verification: ChainVerification };
 }

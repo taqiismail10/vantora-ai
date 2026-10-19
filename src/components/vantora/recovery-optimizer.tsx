@@ -29,6 +29,7 @@ import type { PermissionTier } from "@/lib/security/permission-gate";
 import type { RecoveryPlanResult } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
+import { CounterpartyFallbacks, EchoSolvencyCheck, PLAN_B_ANCHOR, PlanBJumpHint } from "./plan-resilience";
 import {
   DeterministicBadge,
   impliedApr,
@@ -186,10 +187,13 @@ function PlanCard({
         </div>
         <p className="text-[11px] text-slate-500 dark:text-slate-400">{plan.notes}</p>
         {recommended && onApprove && plan.feasible ? (
-          <Button size="sm" onClick={onApprove} className="w-fit text-[11px]">
-            Approve in the action center
-            <ArrowRight className="size-3.5" />
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="sm" onClick={onApprove} className="text-[11px]">
+              Approve in the action center
+              <ArrowRight className="size-3.5" />
+            </Button>
+            <PlanBJumpHint />
+          </div>
         ) : null}
       </CardContent>
     </Card>
@@ -371,6 +375,11 @@ export function RecoveryOptimizer({
           tone="bad"
           icon={<TrendingDown className="size-4" />}
         />
+      </div>
+
+      <div id={PLAN_B_ANCHOR} className="flex flex-col gap-4">
+        <CounterpartyFallbacks data={data} />
+        <EchoSolvencyCheck data={data} />
       </div>
 
       <ProcrastinationCurve data={data} />

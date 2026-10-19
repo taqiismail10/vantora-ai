@@ -18,6 +18,7 @@ import {
 } from "./agent/vantora-copilot";
 import type { DashboardState } from "./dashboard-state";
 import { engineHealth, postRecoveryP10Trajectory, procrastinationCurve } from "./quant-client";
+import { counterpartyFallbacks, postCrunchEchoCheck } from "./recovery-scenarios";
 import { readChain, verifyChain } from "./sandbox/execution-logger";
 import {
   DEFAULT_SCENARIO_PRESET,
@@ -86,6 +87,11 @@ export async function buildDashboardState(
     optimization,
     post_recovery_p10_trajectory: postRecoveryP10Trajectory(forecast, optimization),
     procrastination_curve: procrastinationCurve(state, forecast, optimization),
+    // Every lever but the bridge draw is an offer, and every day-14 fix
+    // creates a day-31 obligation. Both are pre-computed here so the CFO
+    // sees them beside the plan rather than discovering them afterwards.
+    counterparty_fallbacks: counterpartyFallbacks(state, forecast, optimization),
+    post_crunch_echo_check: postCrunchEchoCheck(state, optimization),
     // Already screened and sanitised by the same function the agent read path
     // uses. The raw text never leaves that module.
     memos: screenInvoiceMemos(ctx),

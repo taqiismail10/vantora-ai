@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 import { verifyAuditChain } from "./client-api";
 import { DecisionBadge, SectionHeading, TierBadge } from "./primitives";
+import { RedTeamPlayground } from "./red-team-playground";
 
 const FILTERS = ["ALL", "ALLOWED", "DRAFTED", "DENIED"] as const;
 const GENESIS = "0".repeat(64);
@@ -161,223 +162,230 @@ export function AuditLedger({ data }: { data: DashboardState }) {
   const brokenAt = verification.valid ? null : verification.brokenAtSeq;
 
   return (
-    <Card className="border-slate-200 dark:border-slate-800">
-      <CardHeader>
-        <SectionHeading
-          title="Verifiable execution ledger"
-          hint="logs/sandbox_operation_logs.jsonl · SHA-256 hash chain"
-        />
-        <CardDescription className="text-xs">
-          Each entry commits to its predecessor: currentLogHash = SHA-256(seq │ timestamp │ actor │ operation │
-          tier │ decision │ reason │ payloadDigest │ prevLogHash). Editing, deleting or reordering any row breaks
-          every hash after it. Payloads are stored only as digests, so no figure or account number is ever written
-          to the log.
-        </CardDescription>
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button size="sm" onClick={verify} disabled={verifying} className="text-[11px]">
-            {verifying ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-            {verifying ? `Verifying… ${walkedTo ?? 0} / ${source.length}` : "Verify SHA-256 chain integrity"}
-          </Button>
+    <div className="flex flex-col gap-4">
+      {/* The playground sits above the ledger on purpose: a judge should be
+          able to attack the gate first, then watch the chain that recorded
+          the real attempts stay intact. */}
+      <RedTeamPlayground />
 
-          {tampered ? (
-            <Button size="sm" variant="outline" onClick={restore} disabled={verifying} className="text-[11px]">
-              <RotateCcw className="size-4" />
-              Restore verified chain
+      <Card className="border-slate-200 dark:border-slate-800">
+        <CardHeader>
+          <SectionHeading
+            title="Verifiable execution ledger"
+            hint="logs/sandbox_operation_logs.jsonl · SHA-256 hash chain"
+          />
+          <CardDescription className="text-xs">
+            Each entry commits to its predecessor: currentLogHash = SHA-256(seq │ timestamp │ actor │ operation │
+            tier │ decision │ reason │ payloadDigest │ prevLogHash). Editing, deleting or reordering any row breaks
+            every hash after it. Payloads are stored only as digests, so no figure or account number is ever written
+            to the log.
+          </CardDescription>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button size="sm" onClick={verify} disabled={verifying} className="text-[11px]">
+              {verifying ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+              {verifying ? `Verifying… ${walkedTo ?? 0} / ${source.length}` : "Verify SHA-256 chain integrity"}
             </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={tamper}
-              disabled={verifying || source.length < TAMPER_SEQ}
-              className="text-[11px]"
-            >
-              <Unlink className="size-4 text-slate-500" />
-              Simulate tamper on entry #{TAMPER_SEQ}
-            </Button>
-          )}
 
-          <Button size="sm" variant="outline" onClick={download} className="text-[11px]">
-            Download .jsonl
-          </Button>
-
-          <Badge
-            variant="outline"
-            className={cn(
-              "border-transparent font-mono text-[10px]",
-              verification.valid
-                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
-            )}
-          >
-            {verification.valid ? (
-              <>
-                ✓ {verification.length} of {verification.length} verified · chain intact from genesis
-                {elapsedMs !== null ? ` · recomputed in ~${Math.max(elapsedMs, 1)}ms` : ""}
-              </>
-            ) : (
-              <>
-                BROKEN at seq {verification.brokenAtSeq} — {verification.reason}
-              </>
-            )}
-          </Badge>
-
-          <span className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
-            {counts.total} entries · {counts.allowed} allowed · {counts.drafted} drafted · {counts.denied} denied
-          </span>
-          <div className="ml-auto flex gap-1">
-            {FILTERS.map((option) => (
-              <Button
-                key={option}
-                size="sm"
-                variant={filter === option ? "secondary" : "ghost"}
-                onClick={() => setFilter(option)}
-                className="h-6 font-mono text-[10px]"
-              >
-                {option}
+            {tampered ? (
+              <Button size="sm" variant="outline" onClick={restore} disabled={verifying} className="text-[11px]">
+                <RotateCcw className="size-4" />
+                Restore verified chain
               </Button>
-            ))}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="px-0">
-        {!verification.valid ? (
-          <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-            <ShieldX className="mt-0.5 size-4 shrink-0" />
-            <span>
-              <span className="font-semibold">BROKEN at seq {verification.brokenAtSeq}</span> — {verification.reason}.
-              Chain broken from this point forward; every entry after it is untrustworthy.
-            </span>
-          </div>
-        ) : null}
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={tamper}
+                disabled={verifying || source.length < TAMPER_SEQ}
+                className="text-[11px]"
+              >
+                <Unlink className="size-4 text-slate-500" />
+                Simulate tamper on entry #{TAMPER_SEQ}
+              </Button>
+            )}
 
-        <Table className="text-xs">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-16">seq</TableHead>
-              <TableHead className="w-44">timestamp</TableHead>
-              <TableHead>operation</TableHead>
-              <TableHead>tier</TableHead>
-              <TableHead>decision</TableHead>
-              <TableHead>reason</TableHead>
-              <TableHead className="w-28">chain</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map((entry, index) => {
-              const after = brokenAt !== null && entry.seq > brokenAt;
-              const atBreak = brokenAt === entry.seq;
-              const scanning = verifying && walkedTo === entry.seq;
-              const walked = walkedTo !== null && entry.seq <= walkedTo && !after && !atBreak;
-              return (
-                <TableRow
-                  key={`${entry.seq}-${entry.currentLogHash}`}
-                  onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
-                  className={cn(
-                    "cursor-pointer transition-colors",
-                    entry.decision === "DENIED" && "bg-rose-50/50 dark:bg-rose-950/20",
-                    entry.tier === "TIER_3_PROHIBITED" && "bg-rose-100/70 dark:bg-rose-950/40",
-                    scanning && "bg-emerald-100/80 dark:bg-emerald-900/40",
-                    atBreak && "bg-rose-100 dark:bg-rose-950/60",
-                    // Everything after the break is unverifiable, not merely wrong.
-                    after && "opacity-40",
-                  )}
+            <Button size="sm" variant="outline" onClick={download} className="text-[11px]">
+              Download .jsonl
+            </Button>
+
+            <Badge
+              variant="outline"
+              className={cn(
+                "border-transparent font-mono text-[10px]",
+                verification.valid
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+              )}
+            >
+              {verification.valid ? (
+                <>
+                  ✓ {verification.length} of {verification.length} verified · chain intact from genesis
+                  {elapsedMs !== null ? ` · recomputed in ~${Math.max(elapsedMs, 1)}ms` : ""}
+                </>
+              ) : (
+                <>
+                  BROKEN at seq {verification.brokenAtSeq} — {verification.reason}
+                </>
+              )}
+            </Badge>
+
+            <span className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+              {counts.total} entries · {counts.allowed} allowed · {counts.drafted} drafted · {counts.denied} denied
+            </span>
+            <div className="ml-auto flex gap-1">
+              {FILTERS.map((option) => (
+                <Button
+                  key={option}
+                  size="sm"
+                  variant={filter === option ? "secondary" : "ghost"}
+                  onClick={() => setFilter(option)}
+                  className="h-6 font-mono text-[10px]"
                 >
-                  <TableCell className="font-mono tabular-nums text-slate-400">
-                    {/* The hash-chain rail: a continuous link from genesis down,
-                        snapping at the first entry that no longer recomputes. */}
-                    <span className="flex items-center gap-1.5">
-                      <span className="relative flex h-6 w-2 items-center justify-center">
-                        <span
-                          className={cn(
-                            "absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2",
-                            index === 0 && "top-1/2",
-                            index === shown.length - 1 && "bottom-1/2",
-                            atBreak || after
-                              ? "bg-rose-400 dark:bg-rose-700"
-                              : walked || verification.valid
-                                ? "bg-emerald-500"
-                                : "bg-slate-200 dark:bg-slate-700",
-                          )}
-                        />
-                        {atBreak ? (
-                          <Unlink className="relative size-2.5 text-rose-600 dark:text-rose-400" />
-                        ) : (
-                          <Link2
+                  {option}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="px-0">
+          {!verification.valid ? (
+            <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+              <ShieldX className="mt-0.5 size-4 shrink-0" />
+              <span>
+                <span className="font-semibold">BROKEN at seq {verification.brokenAtSeq}</span> — {verification.reason}.
+                Chain broken from this point forward; every entry after it is untrustworthy.
+              </span>
+            </div>
+          ) : null}
+
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-16">seq</TableHead>
+                <TableHead className="w-44">timestamp</TableHead>
+                <TableHead>operation</TableHead>
+                <TableHead>tier</TableHead>
+                <TableHead>decision</TableHead>
+                <TableHead>reason</TableHead>
+                <TableHead className="w-28">chain</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {shown.map((entry, index) => {
+                const after = brokenAt !== null && entry.seq > brokenAt;
+                const atBreak = brokenAt === entry.seq;
+                const scanning = verifying && walkedTo === entry.seq;
+                const walked = walkedTo !== null && entry.seq <= walkedTo && !after && !atBreak;
+                return (
+                  <TableRow
+                    key={`${entry.seq}-${entry.currentLogHash}`}
+                    onClick={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
+                    className={cn(
+                      "cursor-pointer transition-colors",
+                      entry.decision === "DENIED" && "bg-rose-50/50 dark:bg-rose-950/20",
+                      entry.tier === "TIER_3_PROHIBITED" && "bg-rose-100/70 dark:bg-rose-950/40",
+                      scanning && "bg-emerald-100/80 dark:bg-emerald-900/40",
+                      atBreak && "bg-rose-100 dark:bg-rose-950/60",
+                      // Everything after the break is unverifiable, not merely wrong.
+                      after && "opacity-40",
+                    )}
+                  >
+                    <TableCell className="font-mono tabular-nums text-slate-400">
+                      {/* The hash-chain rail: a continuous link from genesis down,
+                          snapping at the first entry that no longer recomputes. */}
+                      <span className="flex items-center gap-1.5">
+                        <span className="relative flex h-6 w-2 items-center justify-center">
+                          <span
                             className={cn(
-                              "relative size-2.5",
-                              after
-                                ? "text-rose-400"
+                              "absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2",
+                              index === 0 && "top-1/2",
+                              index === shown.length - 1 && "bottom-1/2",
+                              atBreak || after
+                                ? "bg-rose-400 dark:bg-rose-700"
                                 : walked || verification.valid
-                                  ? "text-emerald-600 dark:text-emerald-400"
-                                  : "text-slate-300 dark:text-slate-600",
+                                  ? "bg-emerald-500"
+                                  : "bg-slate-200 dark:bg-slate-700",
                             )}
                           />
-                        )}
+                          {atBreak ? (
+                            <Unlink className="relative size-2.5 text-rose-600 dark:text-rose-400" />
+                          ) : (
+                            <Link2
+                              className={cn(
+                                "relative size-2.5",
+                                after
+                                  ? "text-rose-400"
+                                  : walked || verification.valid
+                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    : "text-slate-300 dark:text-slate-600",
+                              )}
+                            />
+                          )}
+                        </span>
+                        {entry.seq}
                       </span>
-                      {entry.seq}
-                    </span>
-                  </TableCell>
-                  <TableCell className="font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
-                    {toSeconds(entry.timestamp)}
-                  </TableCell>
-                  <TableCell className="font-medium">
-                    <div className="whitespace-nowrap">{entry.operation}</div>
-                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                      {entry.actorType}:{entry.actorId}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <TierBadge tier={entry.tier} />
-                  </TableCell>
-                  <TableCell>
-                    <DecisionBadge decision={entry.decision} />
-                  </TableCell>
-                  <TableCell className="max-w-[28rem] text-slate-600 dark:text-slate-400">
-                    <span className={cn(expanded === entry.seq ? "" : "line-clamp-2")}>{entry.reason}</span>
-                    {expanded === entry.seq ? (
-                      <div className="mt-2 flex flex-col gap-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-500">
-                        <span>timestamp {entry.timestamp}</span>
-                        <span>payloadDigest {entry.payloadDigest}</span>
-                        <span className="flex items-center gap-1">
-                          prev {entry.prevLogHash} <Link2 className="size-3" />
-                        </span>
-                        <span className={cn(atBreak && "text-rose-600 dark:text-rose-400")}>
-                          curr {entry.currentLogHash}
-                          {atBreak ? " ← no longer recomputes from the contents above" : ""}
-                        </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400">
+                      {toSeconds(entry.timestamp)}
+                    </TableCell>
+                    <TableCell className="font-medium">
+                      <div className="whitespace-nowrap">{entry.operation}</div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                        {entry.actorType}:{entry.actorId}
                       </div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="font-mono text-[10px] text-slate-400">
-                    {entry.prevLogHash === GENESIS ? (
-                      <span className="text-emerald-600 dark:text-emerald-400">genesis</span>
-                    ) : (
-                      <>…{entry.prevLogHash.slice(-6)}</>
-                    )}
-                    <div>→ …{entry.currentLogHash.slice(-6)}</div>
+                    </TableCell>
+                    <TableCell>
+                      <TierBadge tier={entry.tier} />
+                    </TableCell>
+                    <TableCell>
+                      <DecisionBadge decision={entry.decision} />
+                    </TableCell>
+                    <TableCell className="max-w-[28rem] text-slate-600 dark:text-slate-400">
+                      <span className={cn(expanded === entry.seq ? "" : "line-clamp-2")}>{entry.reason}</span>
+                      {expanded === entry.seq ? (
+                        <div className="mt-2 flex flex-col gap-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-500">
+                          <span>timestamp {entry.timestamp}</span>
+                          <span>payloadDigest {entry.payloadDigest}</span>
+                          <span className="flex items-center gap-1">
+                            prev {entry.prevLogHash} <Link2 className="size-3" />
+                          </span>
+                          <span className={cn(atBreak && "text-rose-600 dark:text-rose-400")}>
+                            curr {entry.currentLogHash}
+                            {atBreak ? " ← no longer recomputes from the contents above" : ""}
+                          </span>
+                        </div>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="font-mono text-[10px] text-slate-400">
+                      {entry.prevLogHash === GENESIS ? (
+                        <span className="text-emerald-600 dark:text-emerald-400">genesis</span>
+                      ) : (
+                        <>…{entry.prevLogHash.slice(-6)}</>
+                      )}
+                      <div>→ …{entry.currentLogHash.slice(-6)}</div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {shown.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-8 text-center text-slate-500 dark:text-slate-400">
+                    No entries for this filter yet.
                   </TableCell>
                 </TableRow>
-              );
-            })}
-            {shown.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-slate-500 dark:text-slate-400">
-                  No entries for this filter yet.
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+              ) : null}
+            </TableBody>
+          </Table>
 
-        {tampered ? (
-          <p className="m-4 text-[11px] text-slate-500 dark:text-slate-400">
-            The edit above exists only in this browser tab — the file on disk is untouched. Verification is
-            recomputed locally with WebCrypto, so detection does not depend on trusting the service that wrote
-            the log.
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
+          {tampered ? (
+            <p className="m-4 text-[11px] text-slate-500 dark:text-slate-400">
+              The edit above exists only in this browser tab — the file on disk is untouched. Verification is
+              recomputed locally with WebCrypto, so detection does not depend on trusting the service that wrote
+              the log.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

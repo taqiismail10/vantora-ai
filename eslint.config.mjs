@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated submission artefacts: vendored minified bundles and CommonJS
+    // build scripts that are not part of the app and drown the real signal.
+    "docs/.pdf-build/**",
   ]),
 ]);
 
