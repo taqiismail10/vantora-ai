@@ -10,7 +10,7 @@
 import { NextResponse } from "next/server";
 
 import { askCopilot, loadCopilotContext } from "@/lib/agent/vantora-copilot";
-import { parseSmeProfileId, seedApexDataset } from "@/lib/sandbox/seed-data";
+import { parseScenarioPresetId, seedSandboxDataset } from "@/lib/sandbox/seed-data";
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
@@ -24,8 +24,8 @@ export async function POST(request: Request) {
   const question = (body.question ?? "").trim();
   if (!question) return NextResponse.json({ error: "question is required" }, { status: 400 });
 
-  const profile = parseSmeProfileId(body.profile ?? new URL(request.url).searchParams.get("profile"));
-  const seed = await seedApexDataset(profile);
+  const profile = parseScenarioPresetId(body.profile ?? new URL(request.url).searchParams.get("profile"));
+  const seed = await seedSandboxDataset(profile);
   const ctx = await loadCopilotContext(undefined, seed.smeProfileId, profile);
   const turn = await askCopilot({
     question,

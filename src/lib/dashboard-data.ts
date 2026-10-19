@@ -20,25 +20,26 @@ import type { DashboardState } from "./dashboard-state";
 import { engineHealth, postRecoveryP10Trajectory, procrastinationCurve } from "./quant-client";
 import { readChain, verifyChain } from "./sandbox/execution-logger";
 import {
-  DEFAULT_SME_PROFILE,
-  SME_PROFILES,
-  seedApexDataset,
-  smeFinancialState,
-  type SmeProfileId,
+  DEFAULT_SCENARIO_PRESET,
+  SCENARIO_PRESETS,
+  scenarioState,
+  seedSandboxDataset,
+  type ScenarioPresetId,
 } from "./sandbox/seed-data";
+import { BASELINE_STRESS, isBaselineStress, type StressControls } from "./stress-controls";
 import { classifyOperation, verifyNumericalIntegrity } from "./security/permission-gate";
 
 export async function buildDashboardState(
-  profileId: SmeProfileId = DEFAULT_SME_PROFILE,
-  correlationRho = 0,
+  presetId: ScenarioPresetId = DEFAULT_SCENARIO_PRESET,
+  stress: StressControls = BASELINE_STRESS,
 ): Promise<DashboardState> {
-  const profile = SME_PROFILES[profileId];
-  const seed = await seedApexDataset(profileId);
-  // rho = 0 reproduces the canonical dataset exactly; above it the forecast is
-  // re-run with one systemic delay factor shared by the whole receivables book.
-  const base = smeFinancialState(profileId);
-  const state = correlationRho > 0 ? { ...base, correlation_rho: correlationRho } : base;
-  const ctx = await loadCopilotContext(state, seed.smeProfileId, profileId);
+  const preset = SCENARIO_PRESETS[presetId];
+  const seed = await seedSandboxDataset(presetId);
+  // At rest this is the preset dataset itself, which is what every canonical
+  // figure is pinned to; move any control and the forecast and the MILP are
+  // both re-run against the perturbed inputs.
+  const state = scenarioState(presetId, stress);
+  const ctx = await loadCopilotContext(state, seed.smeProfileId, presetId);
   const { forecast, optimization } = ctx;
 
   const narrative = synthesizeNarrative(ctx);
@@ -46,19 +47,21 @@ export async function buildDashboardState(
 
   return {
     company_name: state.company_name,
-    plan_id: recoveryPlanId(optimization, profileId),
+    plan_id: recoveryPlanId(optimization, presetId),
     profile: {
-      id: profile.id,
-      industry: profile.industry,
-      alert_band: profile.alert_band,
-      headline: profile.headline,
-      available: Object.values(SME_PROFILES).map((p) => ({
+      id: preset.id,
+      industry: preset.industry,
+      alert_band: preset.alert_band,
+      headline: preset.headline,
+      available: Object.values(SCENARIO_PRESETS).map((p) => ({
         id: p.id,
         alert_band: p.alert_band,
-        label: p.state.company_name ?? p.id,
+        label: p.label,
         headline: p.headline,
       })),
     },
+    stress,
+    stress_is_baseline: isBaselineStress(stress),
     correlation_rho: state.correlation_rho ?? 0,
     seed: { ...seed, source: seed.mode === "prisma" ? "Supabase (Prisma)" : "In-memory dataset" },
     engine: {

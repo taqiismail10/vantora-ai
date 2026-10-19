@@ -20,10 +20,13 @@ import { money2 } from "./primitives";
 export function AttestationPopover({
   integrity,
   source,
+  blocked = [],
 }: {
   integrity: NumericalIntegrityResult;
   /** What produced the text, shown so "attested" is not mistaken for "generated". */
   source: string;
+  /** Audit entries where this same check already refused a fabricated figure. */
+  blocked?: { seq: number; reason: string }[];
 }) {
   const dollars = integrity.checkedDollarFigures;
   const rates = integrity.checkedPercentages;
@@ -95,12 +98,33 @@ export function AttestationPopover({
           <Badge variant="outline" className="mb-1 font-mono text-[10px]">
             deterministic anti-hallucination
           </Badge>
-          <p>
-            Fabricated numbers are rejected before display, not flagged after it. Run the red-team drill to
-            watch <span className="font-mono">$45,000</span> and{" "}
-            <span className="font-mono">6.25% APR</span> get blocked and appended to the audit chain as a
-            DENIED entry.
-          </p>
+          {blocked.length ? (
+            // Not an illustration: these are entries this check already wrote
+            // to the chain in this session, quoted back with their sequence.
+            <>
+              <p>
+                Fabricated numbers are rejected before display, not flagged after it. This same check has
+                already refused {blocked.length} payload{blocked.length === 1 ? "" : "s"} on this chain:
+              </p>
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {blocked.slice(0, 4).map((entry) => (
+                  <li key={entry.seq} className="flex gap-1.5">
+                    <span className="shrink-0 font-mono text-rose-700 dark:text-rose-400">seq {entry.seq}</span>
+                    <span className="min-w-0 truncate" title={entry.reason}>
+                      {entry.reason.replace(/^numerical integrity failure: /, "")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p>
+              Fabricated numbers are rejected before display, not flagged after it. Run the red-team drill to
+              watch <span className="font-mono">$45,000</span> and{" "}
+              <span className="font-mono">6.25% APR</span> get blocked and appended to the audit chain as
+              DENIED entries.
+            </p>
+          )}
         </div>
       </PopoverContent>
     </Popover>

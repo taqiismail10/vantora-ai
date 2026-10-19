@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { KeyRound, Loader2, Lock, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { FileWarning, KeyRound, Loader2, Lock, Send, ShieldCheck, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,19 @@ interface Tier2Entry {
   confirmAmount: number;
 }
 
-const ACCOUNT_LABEL = "Apex Operating account ••4471";
+const ACCOUNT_LABEL = "Smart Jeans operating account ••4471";
+
+/** Plain-English supplier archetype for the approval disclosure. */
+const ARCHETYPE_LABEL: Record<string, string> = {
+  MONOPOLY_STRICT: "single-source, not deferrable",
+  FLEXIBLE_PARTNER: "strategic partner",
+  COMMERCIAL_NEGOTIATOR: "commercial mill",
+  STATUTORY: "statutory",
+  OVERHEAD: "overhead",
+};
+
+/** Invoices the buyer's own ERP has blocked. They need a document, not a discount. */
+const MATCH_EXCEPTIONS = new Set(["QTY_VARIANCE", "PRICE_VARIANCE"]);
 
 /** `d` days from today, as a human date. Called only inside an open dialog. */
 function offsetDate(days: number): string {
@@ -95,6 +107,13 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
   const plan = data.optimization.optimal_plan;
   const discount = plan.actions.find((a) => a.kind === "ar_early_discount");
   const deferral = plan.actions.find((a) => a.kind === "ap_deferral");
+  const blocked = data.state.invoices_ar.find((i) => MATCH_EXCEPTIONS.has(i.match_status ?? ""));
+  // Entries where this exact check already refused a fabricated figure, read
+  // off the live chain rather than hard-coded, so the popover cites evidence
+  // that exists rather than evidence we expect to exist.
+  const integrityDenials = data.audit.entries
+    .filter((entry) => entry.decision === "DENIED" && entry.reason.startsWith("numerical integrity failure"))
+    .map((entry) => ({ seq: entry.seq, reason: entry.reason }));
 
   const [busy, setBusy] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -174,7 +193,13 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
           detail: deferral.label,
           input: { payable_id: deferral.target_id, plan_id: data.plan_id },
           authorize: `Send a payment-deferral request to ${deferralPayable.supplier_name}`,
-          counterparty: `${deferralPayable.supplier_name} (existing trade account)`,
+          counterparty: `${deferralPayable.supplier_name} — ${
+            ARCHETYPE_LABEL[deferralPayable.supplier_archetype ?? "OVERHEAD"]
+          }${
+            (deferralPayable.past_extension_count ?? 0) >= 1
+              ? ", goodwill already spent"
+              : ", first schedule change asked of them"
+          }`,
           moneyLeaves: "Nothing today",
           moneyArrives: `${money(deferralPayable.amount)} stays in the account past day ${deferralPayable.due_day}`,
           obligation: `${money2(deferralPayable.amount + (deferralPayable.deferral_fee_pct ?? 0) * deferralPayable.amount)} on ${offsetDate(
@@ -190,7 +215,13 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
           detail: `${draw.label} · ${money2(draw.cost)} cost`,
           input: { financing_id: draw.target_id, amount: draw.cash_impact, plan_id: data.plan_id },
           authorize: `Draw on the ${drawOption.provider} line`,
-          counterparty: `${drawOption.provider} (existing pre-approved line)`,
+          counterparty: `${drawOption.provider}${
+            drawOption.is_existing_facility ? " — existing, already underwritten" : ""
+          }${
+            drawOption.requires_notice_of_assignment
+              ? ", notifies your buyer"
+              : ", confidential: your buyer is never notified"
+          }`,
           moneyLeaves: "Nothing today",
           moneyArrives: `${money(draw.cash_impact)} into ${ACCOUNT_LABEL}`,
           obligation: `${money2(draw.cash_impact + draw.cost)} on ${offsetDate(30)} (30 days @ ${pct(
@@ -214,6 +245,7 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
               <div className="flex flex-wrap gap-1.5">
                 <AttestationPopover
                   integrity={data.copilot.narrative_integrity}
+                  blocked={integrityDenials}
                   source={
                     data.copilot.anthropic_key_present
                       ? `${data.copilot.model} with engine tools`
@@ -277,7 +309,7 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
               <input
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder="e.g. what happens if Harbor Freight declines the discount?"
+                placeholder="e.g. what happens if Zara declines the early-settlement offer?"
                 className="h-9 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus-visible:border-slate-400 dark:border-slate-800 dark:bg-slate-950"
               />
               <Button type="submit" size="sm" disabled={busy !== null || !question.trim()}>
@@ -366,6 +398,38 @@ export function ActionCenter({ data, onLedgerChanged }: { data: DashboardState; 
               >
                 {busy === "draft_supplier_deferral_email" ? <Loader2 className="size-4 animate-spin" /> : null}
                 Draft {deferral.label}
+              </Button>
+            ) : null}
+            {/* Not a lever in the plan, and deliberately offered anyway: the
+                cash behind a blocked invoice is unreachable until the dock
+                exception clears, so the clerical note is the highest-value
+                Tier 1 draft on the board even though the solver cannot price
+                it. It is clerk-signed, never owner-signed. */}
+            {blocked ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() =>
+                  stageDraft(
+                    "draft_customer_discount_offer",
+                    `3-way reconciliation · ${blocked.id}`,
+                    { invoice_id: blocked.id },
+                  )
+                }
+                className="h-auto justify-start py-1.5 text-left text-[11px] whitespace-normal"
+              >
+                {busy === "draft_customer_discount_offer" ? (
+                  <Loader2 className="size-4 shrink-0 animate-spin" />
+                ) : (
+                  <FileWarning className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                )}
+                <span>
+                  Draft the 3-way reconciliation request to {blocked.customer_name}
+                  <span className="block text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                    {money(blocked.amount)} blocked in their GR/IR queue · clerk-signed
+                  </span>
+                </span>
               </Button>
             ) : null}
             <Button

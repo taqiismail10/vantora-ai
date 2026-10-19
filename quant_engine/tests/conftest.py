@@ -1,8 +1,11 @@
-"""Apex Manufacturing Ltd -- the reference SME with a Day 14 liquidity crunch.
+"""Smart Jeans Manufacturing Ltd -- the reference plant with a Day 14 crunch.
 
-Two reliable invoices land early and cover the first fortnight of bills, so P10
-cash holds above the $25,000 buffer until the day-14 payroll run blows through
-it. The slow B2B receivables (Northwind, Harbor, Cascade) only arrive in week 4.
+A deliberately separate dataset from the shipped seed: it exercises the engine's
+mechanics (dispersion, ranking, MILP status) on its own numbers, so a change to
+the product dataset cannot quietly make an engine test pass. Two reliable
+invoices land early and cover the first fortnight of bills, so P10 cash holds
+above the $25,000 buffer until the day-14 payroll run blows through it. The slow
+retail receivables only arrive in week 4.
 """
 
 from __future__ import annotations
@@ -17,9 +20,9 @@ from quant_engine.schemas import (
 )
 
 
-def apex_manufacturing_state() -> SmeFinancialStateInput:
+def smart_jeans_state() -> SmeFinancialStateInput:
     return SmeFinancialStateInput(
-        company_name="Apex Manufacturing Ltd",
+        company_name="Smart Jeans Manufacturing Ltd",
         current_cash=48_000.0,
         minimum_safe_buffer=25_000.0,
         credit_score=672,
@@ -29,7 +32,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
         invoices_ar=[
             ArInvoice(
                 id="INV-1001",
-                customer_name="Northwind Logistics",
+                customer_name="Kenneth Cole Holdings",
                 amount=62_000.0,
                 due_day=8,
                 expected_delay_days_mean=12.0,
@@ -41,7 +44,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ArInvoice(
                 id="INV-1002",
-                customer_name="Harbor Freight Co",
+                customer_name="Zara International",
                 amount=44_500.0,
                 due_day=12,
                 expected_delay_days_mean=9.0,
@@ -53,7 +56,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ArInvoice(
                 id="INV-1003",
-                customer_name="Cascade Industrial",
+                customer_name="Urban Retail Group",
                 amount=38_000.0,
                 due_day=20,
                 expected_delay_days_mean=6.0,
@@ -65,7 +68,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ArInvoice(
                 id="INV-1004",
-                customer_name="Sterling Parts",
+                customer_name="Cascade Workwear",
                 amount=25_500.0,
                 due_day=2,
                 expected_delay_days_mean=2.0,
@@ -74,7 +77,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ArInvoice(
                 id="INV-1005",
-                customer_name="Veritas Mining",
+                customer_name="Northside Denim Outlet",
                 amount=15_000.0,
                 due_day=26,
                 expected_delay_days_mean=15.0,
@@ -86,7 +89,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ArInvoice(
                 id="INV-1006",
-                customer_name="Gateway Tooling",
+                customer_name="Gateway Apparel Tooling",
                 amount=36_000.0,
                 due_day=3,
                 expected_delay_days_mean=3.0,
@@ -104,7 +107,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ApPayable(
                 id="AP-UTILITIES",
-                supplier_name="Metro Power & Water",
+                supplier_name="Metro Power & Gas",
                 amount=4_200.0,
                 due_day=7,
                 is_flexible=True,
@@ -115,7 +118,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ApPayable(
                 id="AP-RAW-STEEL",
-                supplier_name="Ironclad Steel Supply",
+                supplier_name="Midland Hardware & Fasteners",
                 amount=34_000.0,
                 due_day=10,
                 is_flexible=True,
@@ -126,7 +129,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ApPayable(
                 id="AP-LOGISTICS",
-                supplier_name="Redline Freight Partners",
+                supplier_name="Indigo Denim Mill X",
                 amount=16_800.0,
                 due_day=12,
                 is_flexible=True,
@@ -137,7 +140,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             ApPayable(
                 id="AP-PAYROLL",
-                supplier_name="Monthly factory payroll (100 staff)",
+                supplier_name="Monthly factory payroll (100 shift operators)",
                 amount=78_000.0,
                 due_day=14,
                 late_fee_pct=0.02,
@@ -158,7 +161,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
         financing_options=[
             FinancingOption(
                 id="FIN-MERIDIAN",
-                provider="Meridian Capital",
+                provider="Meridian Capital Partners",
                 product_type="invoice_factoring",
                 max_amount=80_000.0,
                 apr=0.14,
@@ -170,17 +173,17 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             FinancingOption(
                 id="FIN-GRANITE",
-                provider="Granite Bank",
+                provider="Granite Commercial Factoring",
                 product_type="bridge_loan",
                 max_amount=60_000.0,
                 apr=0.11,
                 origination_fee_pct=0.015,
-                min_credit_score=700,  # above Apex's 672 -> screened out
+                min_credit_score=700,  # above the plant's 672 -> screened out
                 funding_days=7,
             ),
             FinancingOption(
                 id="FIN-QUICKFLOAT",
-                provider="QuickFloat Advance",
+                provider="QuickFloat Emergency Advance",
                 product_type="merchant_advance",
                 max_amount=75_000.0,
                 apr=0.46,
@@ -190,7 +193,7 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
             ),
             FinancingOption(
                 id="FIN-SBA",
-                provider="Heritage SBA Program",
+                provider="Heritage SBA Term Facility",
                 product_type="bridge_loan",
                 max_amount=100_000.0,
                 apr=0.08,
@@ -204,4 +207,5 @@ def apex_manufacturing_state() -> SmeFinancialStateInput:
 
 @pytest.fixture
 def apex() -> SmeFinancialStateInput:
-    return apex_manufacturing_state()
+    """Named `apex` for continuity: every engine test already asks for it."""
+    return smart_jeans_state()

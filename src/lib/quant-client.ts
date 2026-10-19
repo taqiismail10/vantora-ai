@@ -17,6 +17,14 @@ const BRIDGE_TERM_DAYS = 30;
 
 // ----------------------------------------------------------------- wire contract
 
+export type MatchStatus = "MATCH_CLEAN" | "QTY_VARIANCE" | "PRICE_VARIANCE" | "MEMO_QUARANTINED";
+export type SupplierArchetype =
+  | "MONOPOLY_STRICT"
+  | "FLEXIBLE_PARTNER"
+  | "COMMERCIAL_NEGOTIATOR"
+  | "STATUTORY"
+  | "OVERHEAD";
+
 export interface ArInvoiceInput {
   id: string;
   customer_name: string;
@@ -28,6 +36,15 @@ export interface ArInvoiceInput {
   early_payment_discount_eligible?: boolean;
   early_payment_discount_pct?: number;
   early_payment_settles_in_days?: number;
+  /** Share of plant revenue this buyer represents. Drives the signatory rule. */
+  revenue_concentration_pct?: number;
+  /** 3-way match state. Anything but MATCH_CLEAN is stuck in a GR/IR queue. */
+  match_status?: MatchStatus;
+  match_exception_detail?: string;
+  invoice_stated_terms?: string;
+  msa_governed_terms?: string;
+  terms_conflict_note?: string;
+  allowed_signatory_role?: string;
 }
 
 export interface ApPayableInput {
@@ -44,6 +61,17 @@ export interface ApPayableInput {
   default_penalty?: number;
   /** Wages: missing it is a statutory breach. Declared, never inferred from the name. */
   is_payroll?: boolean;
+  /** Bank file-lock day. The real deadline, earlier than the due day. */
+  payroll_lock_day?: number | null;
+  supplier_archetype?: SupplierArchetype;
+  /** Extensions already granted: goodwill is a stock, not a rate. */
+  past_extension_count?: number;
+  /** Added to deferral_fee_pct once past_extension_count >= 1. */
+  extension_surcharge_pct?: number;
+  line_stop_risk?: string;
+  credit_insured_by?: string;
+  /** Deferring past this revokes cover, so it caps the window. */
+  insurance_revocation_day_cap?: number;
 }
 
 export interface FinancingOptionInput {
@@ -57,6 +85,11 @@ export interface FinancingOptionInput {
   funding_days: number;
   requires_ar_collateral?: boolean;
   ar_coverage_ratio?: number;
+  /** Already underwritten: no fresh application, no new hard credit pull. */
+  is_existing_facility?: boolean;
+  /** Factor notifies the buyer directly. Confidential lines do not. */
+  requires_notice_of_assignment?: boolean;
+  notice_of_assignment_note?: string;
 }
 
 export interface SmeFinancialState {
@@ -478,11 +511,19 @@ const effectiveCost = (option: FinancingOptionInput, amount: number) =>
 const costPerDollar = (option: FinancingOptionInput) =>
   (option.origination_fee_pct ?? 0) + option.apr * (BRIDGE_TERM_DAYS / 365);
 
+/** An invoice stuck in a GR/IR exception queue is not collateral a factor will advance against. */
+const MATCH_EXCEPTIONS = new Set<string>(["QTY_VARIANCE", "PRICE_VARIANCE"]);
+
+export const pledgeableAr = (state: SmeFinancialState): number =>
+  state.invoices_ar
+    .filter((i) => !MATCH_EXCEPTIONS.has(i.match_status ?? "MATCH_CLEAN"))
+    .reduce((sum, i) => sum + i.amount, 0);
+
 export function rankFinancingOptions(
   state: SmeFinancialState,
   crunchDay: number | null,
 ): MatchedFinancingOption[] {
-  const pledgeableAr = state.invoices_ar.reduce((sum, i) => sum + i.amount, 0);
+  const pledgeable = pledgeableAr(state);
 
   const matched = state.financing_options.map((option) => {
     let available = option.max_amount;
@@ -495,7 +536,7 @@ export function rankFinancingOptions(
       available = 0;
       reason = `funds in ${option.funding_days}d, needed by day ${crunchDay}`;
     } else if (option.requires_ar_collateral) {
-      available = Math.min(available, (option.ar_coverage_ratio ?? 0.8) * pledgeableAr);
+      available = Math.min(available, (option.ar_coverage_ratio ?? 0.8) * pledgeable);
       if (available <= 0) reason = "no AR available to pledge as collateral";
     }
 
@@ -529,6 +570,25 @@ interface Lever {
   cost: number;
   risk: number;
 }
+
+/**
+ * How far a bill can actually move.
+ *
+ * Trade-credit insurers withdraw cover once an account runs past their cap,
+ * which converts the supplier to cash-in-advance and puts the SME on a bureau
+ * delinquency file. That is not a fee to trade off, so the window is clamped
+ * before the search sees it. Mirrors `deferral_days` in `optimizer.py`.
+ */
+export const deferralDays = (ap: ApPayableInput): number =>
+  Math.min(ap.max_deferral_days ?? 0, ap.insurance_revocation_day_cap ?? 30);
+
+/**
+ * Goodwill is a stock, not a rate: a long-standing partner absorbs the first
+ * schedule change at no cash surcharge, and prices the next one like anyone
+ * else's. Mirrors `deferral_fee_pct` in `optimizer.py`.
+ */
+export const deferralFeePct = (ap: ApPayableInput): number =>
+  (ap.deferral_fee_pct ?? 0) + ((ap.past_extension_count ?? 0) >= 1 ? ap.extension_surcharge_pct ?? 0 : 0);
 
 export const ESCALATION_NOTE =
   "No combination of AR discounts, AP deferrals and eligible facilities closes the gap. " +
@@ -598,10 +658,16 @@ export function localOptimize(
     });
   }
   for (const ap of state.payables_ap) {
+    // Wages are never a lever, whatever the record says. Mirrors the guard in
+    // `optimizer.py`: the feasibility boundary belongs to the engine, not to
+    // whichever fixture happens to set is_flexible.
+    if (ap.is_payroll) continue;
     if (!ap.is_flexible || ap.due_day > crunchDay) continue;
-    if (ap.due_day + (ap.max_deferral_days ?? 0) <= crunchDay) continue;
-    const fee = ap.amount * (ap.deferral_fee_pct ?? 0);
+    const days = deferralDays(ap);
+    if (ap.due_day + days <= crunchDay) continue;
+    const fee = ap.amount * deferralFeePct(ap);
     const risk = ap.relationship_risk ?? 0;
+    const goodwillSpent = (ap.past_extension_count ?? 0) >= 1 && (ap.extension_surcharge_pct ?? 0) > 0;
     levers.push({
       gain: ap.amount,
       cost: fee + risk * riskPrice,
@@ -609,10 +675,14 @@ export function localOptimize(
       action: {
         kind: "ap_deferral",
         target_id: ap.id,
-        label: `Defer ${ap.supplier_name} by ${ap.max_deferral_days}d`,
+        label: `Defer ${ap.supplier_name} by ${days}d`,
         cash_impact: round2(ap.amount),
         cost: round2(fee + risk * riskPrice),
-        detail: `$${round2(fee).toLocaleString()} deferral fee + $${round2(risk * riskPrice).toLocaleString()} relationship risk`,
+        detail:
+          `$${round2(fee).toLocaleString()} deferral fee + $${round2(risk * riskPrice).toLocaleString()} relationship risk` +
+          (goodwillSpent
+            ? `; includes a ${((ap.extension_surcharge_pct ?? 0) * 100).toFixed(1)}% step surcharge, goodwill already spent`
+            : ""),
       },
     });
   }

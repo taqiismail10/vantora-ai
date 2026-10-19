@@ -104,8 +104,13 @@ export function VerdictBar({
   // RED: the three questions a distressed owner actually has.
   const crunchDay = forecast.first_shortfall_day ?? o.crunch_day;
   const crunchP10 = forecast.p10_trajectory[crunchDay - 1];
-  const decisionDay = forecast.decision_day ?? Math.max(1, crunchDay - 3);
   const crunchPayables = state.payables_ap.filter((p) => p.due_day === crunchDay);
+  // The declared bank file-lock day wins over the engine's generic 72h rule:
+  // the deadline is set by the payroll bureau's cutoff, not by a convention.
+  const decisionDay =
+    state.payables_ap.find((p) => p.is_payroll)?.payroll_lock_day ??
+    forecast.decision_day ??
+    Math.max(1, crunchDay - 3);
   const doNothing = o.baseline_do_nothing_plan.total_cost;
   const multiple = o.optimal_plan.total_cost > 0 ? doNothing / o.optimal_plan.total_cost : 0;
 
@@ -133,10 +138,12 @@ export function VerdictBar({
           </span>
         </div>
         <div className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-          72h before the day-{crunchDay} collision:{" "}
+          The bank direct-deposit file locks {crunchDay - decisionDay} days before the day-{crunchDay}{" "}
+          collision:{" "}
           {crunchPayables
             .map((p) => `${money(p.amount)} ${p.is_payroll ? "payroll" : p.supplier_name.split(" (")[0]}`)
             .join(" + ")}
+          . After the lock the run cannot be re-cut.
         </div>
       </Column>
 

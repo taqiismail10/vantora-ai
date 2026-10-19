@@ -15,6 +15,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
+  deferralDays,
+  deferralFeePct,
   forecastCashFlow,
   optimizeRecovery,
   type ForecastResult,
@@ -22,12 +24,12 @@ import {
   type SmeFinancialState,
 } from "../quant-client";
 import {
-  APEX_PROFILE,
-  DEFAULT_SME_PROFILE,
-  SME_PROFILES,
-  smeFinancialState,
+  DEFAULT_SCENARIO_PRESET,
+  SCENARIO_PRESETS,
+  SMART_JEANS_PROFILE,
+  scenarioState,
   IN_MEMORY_PROFILE_ID,
-  type SmeProfileId,
+  type ScenarioPresetId,
 } from "../sandbox/seed-data";
 import {
   detectIndirectPromptInjection,
@@ -49,23 +51,30 @@ export interface CopilotContext {
   /** Stable across stateless requests so an HMAC token stays bindable to it. */
   planId: string;
   smeProfileId: string;
-  /** Which sandbox SME this context is for: it selects the memo set. */
-  sandboxProfile: SmeProfileId;
+  /** Which scenario preset this context is for: it selects the memo set. */
+  sandboxProfile: ScenarioPresetId;
 }
+
+/** Short, stable plan slugs. The HMAC approval token binds to this string. */
+const PLAN_SLUG: Record<ScenarioPresetId, string> = {
+  SOLVABLE_DAY14_CRUNCH: "crunch",
+  HEALTHY_RUNWAY: "healthy",
+  INSOLVENT_STRUCTURAL_GAP: "structural",
+};
 
 export function recoveryPlanId(
   optimization: OptimizationResult,
-  sandboxProfile: SmeProfileId = DEFAULT_SME_PROFILE,
+  sandboxProfile: ScenarioPresetId = DEFAULT_SCENARIO_PRESET,
 ): string {
-  return `${sandboxProfile.replace(/^SME_/, "").toLowerCase()}-recovery-d${optimization.crunch_day}`;
+  return `smartjeans-${PLAN_SLUG[sandboxProfile]}-d${optimization.crunch_day}`;
 }
 
 export async function loadCopilotContext(
   state?: SmeFinancialState,
   smeProfileId: string = IN_MEMORY_PROFILE_ID,
-  sandboxProfile: SmeProfileId = DEFAULT_SME_PROFILE,
+  sandboxProfile: ScenarioPresetId = DEFAULT_SCENARIO_PRESET,
 ): Promise<CopilotContext> {
-  const resolved = state ?? smeFinancialState(sandboxProfile);
+  const resolved = state ?? scenarioState(sandboxProfile);
   const forecast = await forecastCashFlow(resolved);
   const optimization = await optimizeRecovery(resolved);
   return {
@@ -144,7 +153,7 @@ export interface ScreenedMemo {
  * ingested, so nothing downstream has to remember to ask for the check.
  */
 export function screenInvoiceMemos(ctx: CopilotContext): ScreenedMemo[] {
-  return Object.entries(SME_PROFILES[ctx.sandboxProfile].memos).map(([invoiceId, memo]) => {
+  return Object.entries(SCENARIO_PRESETS[ctx.sandboxProfile].memos).map(([invoiceId, memo]) => {
     const scan = detectIndirectPromptInjection(memo);
     return {
       invoice_id: invoiceId,
@@ -288,7 +297,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
 ];
 
 export const COPILOT_SYSTEM_PROMPT = [
-  `You are the Vantora Copilot, a financial participant for ${APEX_PROFILE.companyName}.`,
+  `You are the Vantora Copilot, a financial participant for ${SMART_JEANS_PROFILE.companyName}.`,
   "",
   "Hard rules:",
   "1. Never state a dollar figure, percentage or APR that did not come out of a tool result. Every number",
@@ -326,6 +335,58 @@ const money = (value: number) =>
 
 const pct = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 
+const PLANT = SMART_JEANS_PROFILE.companyName.replace(/\.$/, "");
+
+/**
+ * Who signs outbound text to a buyer.
+ *
+ * A dominant buyer reads an owner-signed collection letter as a distress
+ * signal, and a distress signal from a supplier holding 38% of their volume
+ * gets escalated to their risk desk. So where the ledger declares a signatory
+ * restriction, the draft is clerical and routine by construction — the
+ * restriction is enforced here, not left to whoever presses send.
+ */
+function signature(invoice: { allowed_signatory_role?: string }, department: string): string {
+  return invoice.allowed_signatory_role === "AR_CLERK_OR_CONTROLLER_ONLY"
+    ? `— ${PLANT}, ${department} (clerk-signed; owner signature withheld by buyer-concentration policy)`
+    : `— ${PLANT}, ${department}`;
+}
+
+/**
+ * A blocked 3-way match clears with a document, not a discount.
+ *
+ * Deliberately numeric only in units: the unit counts are not money, so this
+ * draft introduces no dollar figure the integrity check has not already seen
+ * in the engine output.
+ */
+function reconciliationDraft(invoice: {
+  id: string;
+  customer_name: string;
+  amount: number;
+  match_exception_detail?: string;
+  allowed_signatory_role?: string;
+}) {
+  return {
+    to: `${invoice.customer_name} — Accounts Payable / Goods Receipt`,
+    subject: `3-way match reconciliation request — invoice ${invoice.id}`,
+    body: [
+      `Hi ${invoice.customer_name} team,`,
+      "",
+      `Invoice ${invoice.id} for ${money(invoice.amount)} is held in your GR/IR exception queue.`,
+      invoice.match_exception_detail
+        ? `Your record: ${invoice.match_exception_detail}.`
+        : "Your record shows a quantity variance against the goods-receipt note.",
+      "",
+      "Attached are the packing list, the carrier proof of delivery and the dock tally sheet for that",
+      "shipment. Could your goods-receipt team confirm the count against them and release the invoice",
+      "for scheduling? We are not asking for early payment or a change of terms — only for the",
+      "exception to be cleared so the invoice can run on its normal date.",
+      "",
+      signature(invoice, "Accounts Receivable"),
+    ].join("\n"),
+  };
+}
+
 function planActionsFor(ctx: CopilotContext, kind: string, targetId?: string) {
   return ctx.optimization.optimal_plan.actions.filter(
     (a) => a.kind === kind && (targetId === undefined || a.target_id === targetId),
@@ -356,7 +417,7 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
       // the raw text is the separate, poisoning act: that escalates to TIER_3.
       const screened = screenInvoiceMemos(ctx);
       const byInvoice = new Map(screened.map((m) => [m.invoice_id, m]));
-      const memos = SME_PROFILES[ctx.sandboxProfile].memos;
+      const memos = SCENARIO_PRESETS[ctx.sandboxProfile].memos;
       if (input.include_memos === true && Object.keys(memos).length) {
         untrustedContext = Object.values(memos).join("\n\n");
       }
@@ -369,7 +430,7 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
       produce = () => ({
         profile: {
           company_name: ctx.state.company_name,
-          industry: SME_PROFILES[ctx.sandboxProfile].industry,
+          industry: SCENARIO_PRESETS[ctx.sandboxProfile].industry,
           current_cash: ctx.state.current_cash,
           minimum_safe_buffer: ctx.state.minimum_safe_buffer,
           credit_score: ctx.state.credit_score,
@@ -406,9 +467,32 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
 
     case "draft_customer_discount_offer": {
       const invoiceId = String(input.invoice_id ?? "");
-      const action = planActionsFor(ctx, "ar_early_discount", invoiceId)[0];
       const invoice = ctx.state.invoices_ar.find((i) => i.id === invoiceId);
-      if (!action || !invoice) {
+      if (!invoice) {
+        payload = { error: `${invoiceId} is not an invoice on this ledger` };
+        produce = () => payload;
+        break;
+      }
+
+      // A blocked 3-way match is a clerical problem, not a pricing one. Asking
+      // a buyer whose ERP has already rejected the invoice for early payment
+      // gets nothing; clearing the dock variance is what unblocks the cash, so
+      // that is what this drafts instead.
+      if (invoice.match_status === "QTY_VARIANCE" || invoice.match_status === "PRICE_VARIANCE") {
+        const draft = reconciliationDraft(invoice);
+        payload = draft;
+        produce = () => ({
+          draft,
+          requires_human_send: true,
+          blocked_reason: invoice.match_exception_detail,
+          unblocks: "early-payment discounting and factoring collateral, once reconciled",
+          tier_2_operation: "send_match_reconciliation_request",
+        });
+        break;
+      }
+
+      const action = planActionsFor(ctx, "ar_early_discount", invoiceId)[0];
+      if (!action) {
         payload = { error: `${invoiceId} is not an early-payment lever in the optimal plan` };
         produce = () => payload;
         break;
@@ -424,15 +508,19 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
           `${pct(invoice.early_payment_discount_pct ?? 0)} early-payment discount, so ${money(action.cash_impact)}`,
           `clears the invoice in full.`,
           "",
+          "We are forward-purchasing Q1 raw denim, so this is priced as a treasury yield on your side",
+          "rather than a concession on ours. Terms, volumes and the schedule are otherwise unchanged.",
+          "",
           "Payment details are unchanged from the account on file.",
           "",
-          "— Apex Manufacturing, Accounts Receivable",
+          signature(invoice, "Accounts Receivable"),
         ].join("\n"),
       };
       payload = draft;
       produce = () => ({
         draft,
         requires_human_send: true,
+        signatory: invoice.allowed_signatory_role || "AR_CLERK",
         tier_2_operation: "issue_early_payment_discount",
       });
       break;
@@ -447,6 +535,8 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
         produce = () => payload;
         break;
       }
+      const days = deferralDays(payable);
+      const feePct = deferralFeePct(payable);
       const draft = {
         to: payable.supplier_name,
         subject: `Short payment-timing request — ${payable.id}`,
@@ -454,13 +544,17 @@ export async function runCopilotTool(request: ToolRunRequest): Promise<ToolRunRe
           `Hi ${payable.supplier_name} team,`,
           "",
           `We are managing a known receivables-timing gap and would like to move the`,
-          `${money(payable.amount)} balance on ${payable.id} by ${payable.max_deferral_days} days.`,
-          `We will pay the agreed ${pct(payable.deferral_fee_pct ?? 0)} deferral fee —`,
-          `${money((payable.deferral_fee_pct ?? 0) * payable.amount)} — with the balance on the deferred date.`,
+          `${money(payable.amount)} balance on ${payable.id} by ${days} days.`,
+          `We will pay the agreed ${pct(feePct)} deferral fee —`,
+          `${money(feePct * payable.amount)} — with the balance on the deferred date.`,
+          (payable.past_extension_count ?? 0) >= 1
+            ? "We recognise this is not the first schedule change we have asked of you this year."
+            : "This is the first schedule change we have asked of you.",
           "",
-          "Nothing else about the order or the account changes.",
+          `The request stays inside the ${payable.insurance_revocation_day_cap ?? 30}-day window your trade-credit`,
+          "cover allows, so nothing is reported and nothing about the order changes.",
           "",
-          "— Apex Manufacturing, Accounts Payable",
+          `— ${PLANT}, Accounts Payable`,
         ].join("\n"),
       };
       payload = draft;

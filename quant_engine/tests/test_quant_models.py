@@ -7,10 +7,15 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from quant_engine.financing_ranker import effective_apr, effective_cost, rank_financing
+from quant_engine.financing_ranker import (
+    effective_apr,
+    effective_cost,
+    pledgeable_ar,
+    rank_financing,
+)
 from quant_engine.forecaster import forecast
 from quant_engine.main import app
-from quant_engine.optimizer import optimize
+from quant_engine.optimizer import deferral_days, deferral_fee_pct, optimize
 from quant_engine.schemas import N_SIMULATIONS, SEED, ArInvoice, SmeFinancialStateInput
 
 CRUNCH_DAY = 14
@@ -334,3 +339,66 @@ def test_api_endpoints(apex):
     assert body["optimal_plan"]["total_cost"] < body["naive_borrowing_plan"]["total_cost"]
 
     assert client.post("/api/quant/forecast", json={"current_cash": 1}).status_code == 422
+
+
+# ----------------------------------------------------------- supply-chain corner cases
+
+
+def test_goodwill_is_a_stock_not_a_rate(apex):
+    """The first schedule change is free of cash surcharge; the next is not."""
+    partner = next(p for p in apex.payables_ap if p.id == "AP-RAW-STEEL")
+    partner.extension_surcharge_pct = 0.015
+    assert deferral_fee_pct(partner) == pytest.approx(0.005)
+
+    partner.past_extension_count = 1
+    assert deferral_fee_pct(partner) == pytest.approx(0.020)
+    # 1.5% of the $34,000 balance, charged as a step rather than a drift.
+    assert partner.amount * (deferral_fee_pct(partner) - 0.005) == pytest.approx(510.0)
+
+
+def test_insurance_cap_clamps_the_deferral_window(apex):
+    """Trade-credit cover, not the supplier's patience, sets the real ceiling."""
+    mill = next(p for p in apex.payables_ap if p.id == "AP-LOGISTICS")
+    mill.max_deferral_days = 45  # what the mill says it would accept
+    mill.credit_insured_by = "Atradius"
+    mill.insurance_revocation_day_cap = 30
+
+    # Past the cap the insurer withdraws cover and the account is reported, so
+    # the solver is never offered the window at all.
+    assert deferral_days(mill) == 30
+    assert all(a.target_id != mill.id or "45d" not in a.label for a in optimize(apex).optimal_plan.actions)
+
+
+def test_match_exceptions_dilute_the_borrowing_base(apex):
+    """A receivable the buyer's ERP has blocked is not assignable collateral."""
+    gross = sum(i.amount for i in apex.invoices_ar)
+    assert pledgeable_ar(apex) == pytest.approx(gross)
+
+    blocked = apex.invoices_ar[0]
+    blocked.match_status = "QTY_VARIANCE"
+    assert pledgeable_ar(apex) == pytest.approx(gross - blocked.amount)
+
+    # And the dilution reaches the quote: a secured facility advances against
+    # the base, not against the invoice ledger.
+    secured = next(o for o in apex.financing_options if o.requires_ar_collateral)
+    secured.max_amount = 1_000_000.0  # force the collateral test to bind
+    matched = {m.id: m for m in rank_financing(apex, forecast(apex))}
+    assert matched[secured.id].max_available == pytest.approx(
+        secured.ar_coverage_ratio * pledgeable_ar(apex), rel=1e-9
+    )
+
+
+def test_payroll_is_never_a_deferral_lever_even_if_marked_flexible(apex):
+    """The feasibility boundary is the engine's, not the fixture's.
+
+    A seed that marked wages flexible would otherwise let the MILP buy runway
+    by deferring payroll, which is a statutory breach rather than a cheap lever.
+    """
+    payroll = next(p for p in apex.payables_ap if p.is_payroll)
+    payroll.is_flexible = True
+    payroll.max_deferral_days = 21
+    payroll.deferral_fee_pct = 0.001  # absurdly cheap, so price cannot excuse it
+
+    plan = optimize(apex).optimal_plan
+    assert plan.feasible
+    assert all(a.target_id != payroll.id for a in plan.actions)

@@ -9,7 +9,8 @@
 import { connection, NextResponse } from "next/server";
 
 import { buildDashboardState } from "@/lib/dashboard-data";
-import { parseSmeProfileId } from "@/lib/sandbox/seed-data";
+import { parseScenarioPresetId } from "@/lib/sandbox/seed-data";
+import { parseStressControls } from "@/lib/stress-controls";
 
 export async function GET(request: Request) {
   // `cacheComponents` forbids the `dynamic` segment config, so this is how the
@@ -17,14 +18,13 @@ export async function GET(request: Request) {
   // read per request, never baked in at build time.
   await connection();
 
-  // Reading a different sandbox is a pure read: it re-runs the engine and
-  // appends nothing to the audit chain. Anything unrecognised falls back to
-  // Apex rather than erroring, so a bad link still renders.
+  // Switching preset or moving a stress control is a pure read: it re-runs the
+  // forecast and the MILP and appends nothing to the audit chain. Both parsers
+  // narrow to known values rather than erroring, so a hand-edited or stale link
+  // still renders — at the baseline, never at an undesigned input.
   const params = new URL(request.url).searchParams;
-  const profile = parseSmeProfileId(params.get("profile"));
-  // The engine bounds rho at [0, 0.95]; clamp here too so a hand-edited URL
-  // cannot 422 the Python call and silently drop the dashboard to the mirror.
-  const rho = Math.min(Math.max(Number(params.get("rho")) || 0, 0), 0.95);
+  const preset = parseScenarioPresetId(params.get("profile"));
+  const stress = parseStressControls(params);
 
-  return NextResponse.json(await buildDashboardState(profile, rho));
+  return NextResponse.json(await buildDashboardState(preset, stress));
 }

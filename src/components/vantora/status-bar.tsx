@@ -7,38 +7,12 @@ import { Activity, Cpu, Download, Loader2, Shield, ShieldAlert, ShieldCheck } fr
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { DashboardState } from "@/lib/dashboard-state";
+import type { StressControls } from "@/lib/stress-controls";
 import { cn } from "@/lib/utils";
 
-type ProfileId = DashboardState["profile"]["id"];
+import { StressController } from "./stress-controller";
 
-const BAND_STYLE: Record<string, { dot: string; active: string }> = {
-  RED: {
-    dot: "bg-rose-500",
-    active: "border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200",
-  },
-  GREEN: {
-    dot: "bg-emerald-500",
-    active:
-      "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200",
-  },
-  BLACK: {
-    dot: "bg-slate-900 dark:bg-slate-200",
-    active: "border-slate-400 bg-slate-100 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100",
-  },
-};
-
-/** Short names: the switcher has to read at a glance on a 14" screen. */
-const SHORT_NAME: Record<string, string> = {
-  SME_APEX: "Apex Manufacturing",
-  SME_PRECISION: "Precision Carton",
-  SME_MIDLAND: "Midland Die-Cast",
-};
-
-const BAND_CAPTION: Record<string, string> = {
-  RED: "RED — Day-14 crunch",
-  GREEN: "GREEN — Healthy",
-  BLACK: "BLACK — Infeasible",
-};
+type PresetId = DashboardState["profile"]["id"];
 
 /**
  * A broken chain is not one state.
@@ -75,14 +49,16 @@ export function StatusBar({
   redTeamBusy,
   refreshing,
   onRefresh,
-  onSwitchProfile,
+  onSwitchPreset,
+  onStress,
 }: {
   data: DashboardState;
   onRedTeam: () => void;
   redTeamBusy: boolean;
   refreshing: boolean;
   onRefresh: () => void;
-  onSwitchProfile: (profile: ProfileId) => void;
+  onSwitchPreset: (preset: PresetId) => void;
+  onStress: (next: Partial<StressControls>) => void;
 }) {
   const live = data.engine.optimization_source === "python-fastapi";
   const chain = chainStatus(data.audit.verification);
@@ -105,42 +81,16 @@ export function StatusBar({
             {data.company_name ?? "SME"}
           </h1>
           <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-            Vantora recovery copilot · {data.seed.source} · plan {data.plan_id}
+            {data.profile.industry} · Vantora treasury &amp; liquidity copilot · plan {data.plan_id}
           </p>
         </div>
 
-        <div
-          role="group"
-          aria-label="Sandbox SME profile"
-          className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-slate-200 p-1 dark:border-slate-800"
-        >
-          {data.profile.available.map((option) => {
-            const active = option.id === data.profile.id;
-            const style = BAND_STYLE[option.alert_band];
-            return (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => onSwitchProfile(option.id)}
-                disabled={refreshing || active}
-                aria-pressed={active}
-                title={option.headline}
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors",
-                  active
-                    ? cn("border", style.active)
-                    : "border border-transparent text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-400 dark:hover:bg-slate-800",
-                )}
-              >
-                <span className={cn("size-1.5 rounded-full", style.dot)} />
-                {SHORT_NAME[option.id] ?? option.label}
-                <span className="font-mono text-[10px] opacity-70">
-                  [{BAND_CAPTION[option.alert_band] ?? option.alert_band}]
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <StressController
+          data={data}
+          busy={refreshing}
+          onPreset={onSwitchPreset}
+          onStress={onStress}
+        />
 
         <Badge
           variant="outline"

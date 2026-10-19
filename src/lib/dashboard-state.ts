@@ -14,7 +14,8 @@ import type {
   SmeFinancialState,
 } from "./quant-client";
 import type { NumericalIntegrityResult, PermissionTier } from "./security/permission-gate";
-import type { SeedResult, SmeSandboxProfile } from "./sandbox/seed-data";
+import type { ScenarioPreset, SeedResult } from "./sandbox/seed-data";
+import type { StressControls } from "./stress-controls";
 
 export interface MemoScreen {
   invoice_id: string;
@@ -29,10 +30,14 @@ export interface MemoScreen {
 export interface DashboardState {
   company_name?: string;
   plan_id: string;
-  /** Which sandbox SME is loaded, and the band its dataset is shaped to produce. */
-  profile: Pick<SmeSandboxProfile, "id" | "industry" | "alert_band" | "headline"> & {
-    available: (Pick<SmeSandboxProfile, "id" | "alert_band" | "headline"> & { label: string })[];
+  /** Which scenario preset is loaded, and the band its dataset is shaped to produce. */
+  profile: Pick<ScenarioPreset, "id" | "industry" | "alert_band" | "headline"> & {
+    available: Pick<ScenarioPreset, "id" | "alert_band" | "headline" | "label">[];
   };
+  /** Where the four supply-chain stress controls were set for this payload. */
+  stress: StressControls;
+  /** False once any control has moved: the canonical figures no longer apply. */
+  stress_is_baseline: boolean;
   /** The systemic delay correlation this payload was forecast under. */
   correlation_rho: number;
   seed: SeedResult & { source: string };

@@ -23,6 +23,21 @@ enum GateDecision {
   DENIED
 }
 
+enum MatchStatus {
+  MATCH_CLEAN
+  QTY_VARIANCE
+  PRICE_VARIANCE
+  MEMO_QUARANTINED
+}
+
+enum SupplierArchetype {
+  MONOPOLY_STRICT
+  FLEXIBLE_PARTNER
+  COMMERCIAL_NEGOTIATOR
+  STATUTORY
+  OVERHEAD
+}
+
 enum PlanApprovalStatus {
   DRAFT
   PENDING_APPROVAL
@@ -67,6 +82,20 @@ model InvoiceAR {
   earlyPaymentDiscountPct      Float   @default(0.02)
   earlyPaymentSettlesInDays    Int     @default(3)
 
+  /// Share of plant revenue this buyer represents. Drives the signatory rule:
+  /// a dominant buyer reads an owner-signed collection letter as distress.
+  revenueConcentrationPct Float       @default(0)
+  /// 3-way match (PO / goods receipt / invoice). Anything but MATCH_CLEAN is
+  /// blocked in the buyer's GR/IR queue: no early-pay discount, and excluded
+  /// from the factoring borrowing base until reconciled.
+  matchStatus             MatchStatus @default(MATCH_CLEAN)
+  matchExceptionDetail    String?
+  /// Terms as printed vs terms the MSA actually governs at. The forecaster
+  /// settles off the governing schedule, never the optimistic print.
+  invoiceStatedTerms      String?
+  msaGovernedTerms        String?
+  allowedSignatoryRole    String?
+
   /// Free-text customer memo. UNTRUSTED: must pass detectIndirectPromptInjection
   /// before any of it reaches a model prompt.
   memo          String?
@@ -93,6 +122,24 @@ model PayableAP {
   isCritical        Boolean @default(false)
   defaultPenalty    Decimal @default(0) @db.Decimal(14, 2)
 
+  /// Wages. Missing it is a statutory breach, not a late fee — declared here,
+  /// never inferred from the supplier name.
+  isPayroll         Boolean @default(false)
+  /// Day the bank direct-deposit file locks. The real deadline, earlier than
+  /// the due day: after it, the run cannot be re-cut.
+  payrollLockDay    Int?
+
+  supplierArchetype SupplierArchetype @default(OVERHEAD)
+  /// Extensions already granted. Goodwill is a stock, not a rate.
+  pastExtensionCount Int    @default(0)
+  /// Added to deferralFeePct once pastExtensionCount >= 1.
+  extensionSurchargePct Float @default(0)
+  lineStopRisk      String?
+  /// Trade-credit insurer, and the window past which cover is revoked and the
+  /// account is reported. Caps the deferral the solver may propose.
+  creditInsuredBy   String?
+  insuranceRevocationDayCap Int @default(30)
+
   smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
 
   @@unique([smeProfileId, externalId])
@@ -111,7 +158,16 @@ model FinancingOption {
   minCreditScore     Int     @default(0)
   fundingDays        Int
   requiresArCollateral Boolean @default(false)
+  /// Advance rate against pledged AR. The complement is the uncollected-funds
+  /// reserve the factor holds back, not cash the SME can spend.
   arCoverageRatio    Float   @default(0.8)
+  /// Already underwritten: no fresh application, no new hard credit pull.
+  isExistingFacility Boolean @default(false)
+  /// Whether the factor notifies the buyer directly. A confidential
+  /// (non-notification) line does not, which is why it is usable against a
+  /// concentrated buyer without vendor-scorecard damage.
+  requiresNoticeOfAssignment Boolean @default(false)
+  noticeOfAssignmentNote     String?
 
   smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
 

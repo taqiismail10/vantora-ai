@@ -18,6 +18,12 @@ class _Model(BaseModel):
 # --------------------------------------------------------------------------- input
 
 
+MatchStatus = Literal["MATCH_CLEAN", "QTY_VARIANCE", "PRICE_VARIANCE", "MEMO_QUARANTINED"]
+SupplierArchetype = Literal[
+    "MONOPOLY_STRICT", "FLEXIBLE_PARTNER", "COMMERCIAL_NEGOTIATOR", "STATUTORY", "OVERHEAD"
+]
+
+
 class ArInvoice(_Model):
     """An outstanding customer invoice (accounts receivable)."""
 
@@ -31,6 +37,21 @@ class ArInvoice(_Model):
     early_payment_discount_eligible: bool = False
     early_payment_discount_pct: float = Field(default=0.02, ge=0, le=0.2, description="Discount offered to pull cash forward")
     early_payment_settles_in_days: int = Field(default=3, ge=1, description="Days until an accepted discount lands as cash")
+
+    # --- buyer-power and 3-way-match metadata. Descriptive, except match_status,
+    # which the seed uses to switch early_payment_discount_eligible off: an
+    # invoice sitting in a GR/IR exception queue cannot be discounted or factored.
+    revenue_concentration_pct: float = Field(
+        default=0.0, ge=0, le=1, description="Share of plant revenue this buyer represents"
+    )
+    match_status: MatchStatus = Field(default="MATCH_CLEAN", description="3-way match (PO/GRN/invoice) state")
+    match_exception_detail: str = Field(default="", description="What the receiving dock actually disputed")
+    invoice_stated_terms: str = Field(default="", description="Payment terms as printed on the invoice")
+    msa_governed_terms: str = Field(default="", description="Terms the Master Service Agreement actually governs at")
+    terms_conflict_note: str = Field(default="", description="Why the modelled schedule differs from the print")
+    allowed_signatory_role: str = Field(
+        default="", description="Who may sign outbound collection text to this buyer"
+    )
 
 
 class ApPayable(_Model):
@@ -51,6 +72,31 @@ class ApPayable(_Model):
         default=False,
         description="Wages. Missing it is a statutory breach, not a late fee -- declared, never inferred from the name",
     )
+    payroll_lock_day: int | None = Field(
+        default=None,
+        description="Day the bank direct-deposit file locks. The real deadline, earlier than the due day",
+    )
+
+    # --- supplier behaviour. These three are the only new fields the solver
+    # reads: archetype and line-stop risk are descriptive, but goodwill memory
+    # and the insurance cap change what a deferral costs and how far it can go.
+    supplier_archetype: SupplierArchetype = Field(default="OVERHEAD")
+    past_extension_count: int = Field(
+        default=0, ge=0, description="Extensions already granted. Goodwill is a stock, not a rate"
+    )
+    extension_surcharge_pct: float = Field(
+        default=0.0,
+        ge=0,
+        le=0.2,
+        description="Added to deferral_fee_pct once past_extension_count >= 1",
+    )
+    line_stop_risk: str = Field(default="", description="Production consequence of not paying, if any")
+    credit_insured_by: str = Field(default="", description="Trade-credit insurer covering this supplier")
+    insurance_revocation_day_cap: int = Field(
+        default=30,
+        ge=0,
+        description="Deferring past this triggers bureau reporting and cash-in-advance terms, so it caps the window",
+    )
 
 
 class FinancingOption(_Model):
@@ -66,6 +112,14 @@ class FinancingOption(_Model):
     funding_days: int = Field(ge=0, description="Days from acceptance to money in the account")
     requires_ar_collateral: bool = False
     ar_coverage_ratio: float = Field(default=0.8, gt=0, le=1, description="Advance rate against pledged AR")
+    is_existing_facility: bool = Field(
+        default=False, description="Already underwritten: no fresh application, no new hard credit pull"
+    )
+    requires_notice_of_assignment: bool = Field(
+        default=False,
+        description="Factor notifies the buyer directly. Confidential (non-notification) lines do not",
+    )
+    notice_of_assignment_note: str = Field(default="", description="What the buyer would be told, and the cost of that")
 
 
 class SmeFinancialStateInput(_Model):

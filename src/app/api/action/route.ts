@@ -22,7 +22,7 @@ import {
   type ToolRunResult,
 } from "@/lib/agent/vantora-copilot";
 import { readChain, verifyChain } from "@/lib/sandbox/execution-logger";
-import { APEX_INVOICE_MEMOS, seedApexDataset } from "@/lib/sandbox/seed-data";
+import { SMART_JEANS_INVOICE_MEMOS, seedSandboxDataset } from "@/lib/sandbox/seed-data";
 import {
   classifyOperation,
   enforcePermissionGate,
@@ -175,7 +175,7 @@ async function redTeam(ctx: CopilotContext) {
       control_allowed: control.ok,
       passed: blocked === attacks.length && control.ok,
     },
-    memos_screened: Object.keys(APEX_INVOICE_MEMOS).length,
+    memos_screened: Object.keys(SMART_JEANS_INVOICE_MEMOS).length,
   };
 }
 
@@ -191,7 +191,7 @@ export async function POST(request: Request) {
     confirmedAmount?: number;
   };
 
-  const seed = await seedApexDataset();
+  const seed = await seedSandboxDataset();
   const ctx = await loadCopilotContext(undefined, seed.smeProfileId);
 
   switch (body.action) {

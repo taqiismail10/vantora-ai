@@ -15,6 +15,15 @@ from .schemas import (
 
 BRIDGE_TERM_DAYS = 30
 
+# An invoice parked in a GR/IR exception queue is not collateral a factor will
+# advance against: the buyer's ERP has already blocked it, so it cannot be
+# assigned until the dock variance is reconciled.
+MATCH_EXCEPTIONS = frozenset({"QTY_VARIANCE", "PRICE_VARIANCE"})
+
+
+def pledgeable_ar(state: SmeFinancialStateInput) -> float:
+    return sum(i.amount for i in state.invoices_ar if i.match_status not in MATCH_EXCEPTIONS)
+
 
 def effective_cost(option: FinancingOption, amount: float, days: int = BRIDGE_TERM_DAYS) -> float:
     """Origination fee plus pro-rata interest for a `days`-long bridge."""
@@ -53,12 +62,12 @@ def _screen(
 def rank_financing(
     state: SmeFinancialStateInput, forecast_result: ForecastResultOutput
 ) -> list[MatchedFinancingOption]:
-    pledgeable_ar = sum(i.amount for i in state.invoices_ar)
+    pledgeable = pledgeable_ar(state)
     crunch_day = forecast_result.first_shortfall_day
 
     matched = []
     for option in state.financing_options:
-        available, reason = _screen(option, state, pledgeable_ar, crunch_day)
+        available, reason = _screen(option, state, pledgeable, crunch_day)
         matched.append(
             MatchedFinancingOption(
                 id=option.id,

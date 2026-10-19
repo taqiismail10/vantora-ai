@@ -7,7 +7,7 @@ Vantora AI detects a small manufacturer's liquidity collision fourteen days befo
 | | |
 |---|---|
 | **Track** | FinTechathon Topic E — SME Finance Copilot ("AI as a Financial Participant") |
-| **Tests** | **77 passing** — 55 Vitest + 22 pytest (with the Python engine stopped, 2 of the Vitest cases are live-bridge tests that skip themselves: `53 passed, 2 skipped`) |
+| **Tests** | **115 passing** — 82 Vitest + 33 pytest (with the Python engine stopped, 2 of the Vitest cases are live-bridge tests that skip themselves: `80 passed, 2 skipped`) |
 | **Stack** | Next.js 16 (App Router, TS) · FastAPI · NumPy/SciPy · PuLP + HiGHS · Prisma 7 / Supabase · Recharts · shadcn/ui |
 | **License** | MIT |
 | **Runs with zero configuration** | No database, no API key, no Python process required |
@@ -28,8 +28,8 @@ Vantora's answer is structural rather than behavioural: **the model never comput
 | Rubric dimension | Where it is implemented | Evidence |
 |---|---|---|
 | **Task completion — 40%**<br/>Cash-flow management & alerts, business financial analysis, financing matching | Seeded 1,000-path Monte Carlo CFaR (`quant_engine/forecaster.py`), MILP recovery optimiser (`optimizer.py`), deterministic multi-screen financing ranker (`financing_ranker.py`) | Day-14 crunch detected, **$74,700** gap closed for **$1,368.88**, 4 facilities screened with exact rejection reasons |
-| **Security & compliance — 30%** | 4-tier permission gate, HMAC HITL approval tokens, numerical attestation, indirect-prompt-injection screen, SHA-256 hash-chained audit ledger (`src/lib/security/`, `src/lib/sandbox/`) | 5-attack red-team drill runnable live from the dashboard; 13+ chained entries in `logs/sandbox_operation_logs.jsonl`; 32 security tests |
-| **Innovation & interaction — 30%** | Dual-plane architecture with a deterministic TypeScript mirror; counterfactual proof UI; "execute without token" button that lets a judge *watch the gate refuse*; copilot answers carry a `Numerical Integrity: Attested` badge | 4-tab institutional dashboard, Tier-1 draft preview modals, live ledger viewer with chain verification |
+| **Security & compliance — 30%** | 4-tier permission gate, HMAC HITL approval tokens, numerical attestation, indirect-prompt-injection screen, SHA-256 hash-chained audit ledger (`src/lib/security/`, `src/lib/sandbox/`) | 5-attack red-team drill runnable live from the dashboard; 17 genesis-linked workflow entries in `logs/sandbox_operation_logs.jsonl`; 44 security tests |
+| **Innovation & interaction — 30%** | Dual-plane architecture with a deterministic TypeScript mirror; counterfactual proof UI; typed-amount approval modal; copilot answers carry a `Numerical Integrity: Attested` badge | 4-tab institutional dashboard, Tier-1 draft preview modals, live ledger viewer with chain verification |
 
 ---
 
@@ -55,15 +55,15 @@ The status bar tells you which plane is serving: **`Python HiGHS MILP Engine: Co
 ### Verifying the claims
 
 ```bash
-npx vitest run                                                   # 55 tests
-quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -v   # 22 tests
+npx vitest run                                                   # 82 tests
+quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -v   # 33 tests
 npm run lint && npx tsc --noEmit                                 # clean
 npm run build                                                    # production build
 ```
 
-The 55 Vitest cases split as **32 security / audit-chain · 18 copilot orchestration · 5 engine bridge**. Two of the bridge tests compare the Python engine against the TypeScript mirror directly, so they skip when FastAPI is not running — start it (`npm run quant`) to see all 55 execute.
+The 82 Vitest cases split as **44 security / audit-chain · 20 copilot orchestration · 18 engine, domain and stress-control**. Two of those compare the Python engine against the TypeScript mirror directly, so they skip when FastAPI is not running — start it (`npm run quant`) to see all 82 execute. 115 tests in total.
 
-> `next build` emits exactly one Turbopack warning — `Can't resolve '../generated/prisma/client'`. That is deliberate: the Prisma client is imported through a runtime string so `tsc`, Vitest and `next build` never require `prisma generate` to have been run.
+The Prisma client is imported through a runtime string so `tsc`, Vitest and `next build` do not require `prisma generate` to have been run. The final production build completes without warnings.
 
 ---
 
@@ -144,9 +144,21 @@ Nine tools, all routed through the gate. With `ANTHROPIC_API_KEY` set, a real An
 
 ---
 
-## 4. The canonical sandbox scenario — Apex Manufacturing Ltd.
+## 4. The canonical scenario — Smart Jeans Manufacturing Ltd.
 
-A precision manufacturer, 34 staff, credit score 672, $310,000 monthly revenue.
+Technical Denim & Apparel, Plant #4. 100 shift operators (scalable to 160 on peak runs), credit score 672, $185,000 monthly revenue ($2.22M annual), **16% gross margin** — cut-make-trim apparel, where direct labour sits inside COGS — cutting and making on Net-30/45/60 terms for global retail buyers such as Zara International and Kenneth Cole.
+
+Thin margins are the whole point: 16% of $185,000 is roughly $29,600 of gross profit a month to carry rent, utilities and overhead. A $74,700 timing gap is not a cash-flow wobble at that scale, it is the business.
+
+Vantora is single-tenant: there is one plant, and the header carries a **supply-chain stress simulator** over it — three one-click scenario presets and four live dials — rather than a switcher between unrelated companies. Preset 1 with every dial at rest is the canonical dataset below.
+
+| Preset | Band | Shape |
+|---|---|---|
+| `SOLVABLE_DAY14_CRUNCH` — *Peak order run* | **RED** | the day-14 collision below; solved for $1,368.88 |
+| `HEALTHY_RUNWAY` — *Balanced season* | **GREEN** | P10 never breaks; min P10 $77,900 (3.1× buffer); $0 plan |
+| `INSOLVENT_STRUCTURAL_GAP` — *Catastrophic disruption* | **BLACK** | $147,000 day-10 gap vs $73,000 headroom; `INFEASIBLE` |
+
+The four dials — **buyer delay shift** (+0/7/14/21d), **plant shift scale** (100/125/150 operators), **systemic correlation ρ** (0.0/0.3/0.6) and **supplier goodwill memory** (0 or 1 prior extension) — each perturb exactly one input and re-run both the 1,000-trajectory forecast and the MILP. Off-dial query values are rejected rather than clamped, so a hand-edited URL renders the baseline rather than an undesigned scenario. The legacy ids `SME_APEX`, `SME_PRECISION` and `SME_MIDLAND` still resolve to the three presets.
 
 ### The collision
 
@@ -156,7 +168,8 @@ A precision manufacturer, 34 staff, credit score 672, $310,000 monthly revenue.
 | Minimum safe buffer | **$25,000** |
 | **Day 14 — payroll** | **$68,000** (critical, $18,000 default penalty) |
 | **Day 14 — Vulcan Precision Tooling** | **$35,000** (line-stop supplier, critical, $12,000 default penalty) |
-| In transit | **$95,000** of B2B receivables — Northwind $52,000 (due d9, P90 arrival d38) and Harbor $43,000 (due d11, P90 arrival d32) |
+| **Day 11, 2:00 PM — payroll file lock** | the bank direct-deposit cutoff. The real deadline, three days before the due date: after it the run cannot be re-cut |
+| In transit | **$95,000** of buyer receivables — Kenneth Cole $52,000 (due d9, P90 arrival d38) and Zara $43,000 (due d11, P90 arrival d32) |
 | **Day-14 P10 cash** | **−$49,700** |
 | **Required buffer gap** | **$74,700** |
 | Shortfall probability | **100.0%** on the canonical seed |
@@ -171,7 +184,7 @@ The optimiser does not just recommend; it prices the alternatives and shows its 
 
 | | Total cost | What it does | Day-14 P10 after | Buffer |
 |---|---:|---|---:|---|
-| **Optimal recovery plan** | **$1,368.88** | Harbor Freight 1.5% early-pay discount (**$645**) + Ironclad Steel 21-day deferral (**$650** = $150 fee + $500 relationship risk) + **$2,345** Meridian draw (**$73.88**) | **$25,000** | ✅ restored |
+| **Optimal recovery plan** | **$1,368.88** | Zara International 1.5% early-settlement incentive (**$645**) + Midland Hardware & Fasteners 21-day deferral (**$650** = $150 fee + $500 relationship risk) + **$2,345** Meridian confidential-line draw (**$73.88**) | **$25,000** | ✅ restored |
 | Naive borrowing | $5,812.27 | The entire $74,700 from QuickFloat @ **46% APR** (94.7% effective, 30-day) | $25,000 | ✅ restored |
 | Do nothing | $31,963.00 | Payroll missed ($19,360) + Vulcan partially missed ($12,603) — late fees plus both default penalties | −$49,700 | ❌ breached |
 
@@ -183,12 +196,24 @@ The insight the MILP encodes is one a spreadsheet misses: *borrowing is the most
 
 | # | Facility | Quoted APR | Effective APR (30d) | Funding | Decision |
 |---|---|---:|---:|---:|---|
-| 1 | **Meridian Capital** (invoice factoring) | 14.0% | 38.3% | 4 d | ✅ **Approved & matched** — $2,345 drawn |
-| 2 | **QuickFloat Advance** (merchant advance) | 46.0% | 94.7% | 2 d | ✅ Approved, high-APR — used only by the naive counterfactual |
-| 3 | **Granite Bank** (bridge loan) | 11.0% | 29.3% | 7 d | ❌ Rejected — *credit score 672 below minimum 700* |
-| 4 | **Heritage SBA Microloan** (bridge loan) | 8.0% | 20.2% | 21 d | ❌ Rejected — *funds in 21d, needed by day 14* |
+| 1 | **Meridian Capital Partners** — existing confidential AR line | 14.0% | 38.3% | 2 d | ✅ **Approved & matched** — $2,345 drawn |
+| 2 | **QuickFloat Emergency Advance** (merchant advance) | 46.0% | 94.7% | 2 d | ✅ Approved, high-APR — used only by the naive counterfactual |
+| 3 | **Heritage SBA Term Facility** (bridge loan) | 8.0% | 20.2% | 21 d | ❌ Rejected — *funds in 21d, needed by day 14* |
+| 4 | **Granite Commercial Factoring** | 11.0% | 29.3% | 7 d | ❌ Rejected — *credit score 672 below minimum 700*, and it serves **Notice of Assignment** on Zara |
 
-Heritage SBA is the cheapest capital on the board and is still correctly refused: **timing is a hard constraint, not a preference.** Every rejection quotes the exact test that failed — no model judgement is involved anywhere in this table.
+Heritage SBA is the cheapest capital on the board and is still correctly refused: **timing is a hard constraint, not a preference.** Granite is refused twice over — once by the credit screen, once by the relationship: an NOA tells a buyer representing 38% of plant revenue that its supplier has assigned the receivable. Meridian is selected because it is **confidential (non-notification)** and already underwritten, so drawing on it costs nothing on the vendor scorecard. Every rejection quotes the exact test that failed — no model judgement is involved anywhere in this table.
+
+### Supply-chain corner cases the model carries
+
+| Case | Where | What it changes |
+|---|---|---|
+| **Payroll as a feasibility boundary** | `AP-PAYROLL`, `is_payroll` | Wages are not a late fee to price. Any plan leaving payroll unpaid is `feasible: false` with `breaches_statutory_payroll`, and `payroll_lock_day: 11` makes the bank file cutoff the real deadline |
+| **Single-source tooling** | `AP-TOOLING` (`MONOPOLY_STRICT`) | Vulcan's laser-cut dies carry `line_stop_risk: CRITICAL_48H_HALT`. Not deferrable at any price, so it is `is_flexible: false` rather than expensively flexible |
+| **Supplier goodwill as a stock** | `AP-RAW-STEEL` (`FLEXIBLE_PARTNER`) | Midland's first schedule change costs $0 cash surcharge. At `past_extension_count ≥ 1` a **+1.5% step** applies, and the optimiser then switches away from the deferral rather than quietly paying more |
+| **Trade-credit insurance cliff** | `credit_insured_by`, `insurance_revocation_day_cap` | Atradius/Coface withdraw cover past 30 days, converting the account to cash-in-advance and triggering bureau reporting. The window is clamped before the solver sees it |
+| **Buyer power asymmetry** | `INV-2002` Zara, 38% concentration | `allowed_signatory_role: AR_CLERK_OR_CONTROLLER_ONLY`. Outbound text is clerk-signed and framed as a treasury yield; an owner-signed collection letter from a supplier holding 38% of their volume reads as distress |
+| **3-way match exception** | `INV-2001` Kenneth Cole, `QTY_VARIANCE` | A 60-unit GRN variance has the buyer's ERP holding the invoice. No early-pay discount, **and excluded from the factoring borrowing base** — $52,000 of the $198,000 AR ledger is diluted out. Vantora stages a clerk-signed reconciliation request instead |
+| **MSA vs invoice terms** | `INV-2003` Urban Retail | Invoice prints Net-30; MSA §4.2 governs at Net-60. The forecaster settles off the governing schedule, never the optimistic print |
 
 ---
 
@@ -251,7 +276,7 @@ Four tabs, institutional styling, `tabular-nums` throughout, semantic colour onl
 
 1. **Liquidity radar** — four KPI cards; a 30-day Recharts fan chart with the P10–P90 band, the $25,000 buffer threshold, the day-14 collision marker annotated with both payables, and a toggleable post-recovery P10 overlay; AR and AP tables showing reliability scores, delay distributions, P90 arrival days, deferral windows and the per-memo injection screen result.
 2. **Recovery optimizer** — the three counterfactual cards, each carrying the four mandated elements (deterministic-calculation badge, expected cost in $ *and* APR-equivalent, risk score, permission-tier badge); the financing eligibility matrix; the solver's own proof summary.
-3. **Copilot action center** — the attested narrative and a Q&A panel, each answer badged `Numerical Integrity: Attested`; staged Tier-1 drafts with preview modals; and for each Tier-2 operation a pair of buttons — **"Issue HMAC token & execute"** next to **"Execute without token"** — so the refusal can be demonstrated, not just described.
+3. **Copilot action center** — the attested narrative and a Q&A panel, each answer badged `Numerical Integrity: Attested`; staged Tier-1 drafts with preview modals; and a **Review & approve** dialog for each Tier-2 operation, requiring the exact amount before signing a single-use HMAC token. The red-team drill demonstrates refusal of unapproved execution.
 4. **Security & ledger** — a live viewer over `logs/sandbox_operation_logs.jsonl` with tier/decision filters, expandable hash details, a **Verify SHA-256 chain integrity** button and a `.jsonl` export.
 
 ---
@@ -265,7 +290,7 @@ quant_engine/                  Python quantitative engine
   optimizer.py                 MILP (PuLP + HiGHS) + counterfactuals
   financing_ranker.py          deterministic eligibility screen
   main.py                      FastAPI: /api/quant/{forecast,optimize}, /health
-  tests/                       22 pytest tests
+  tests/                       33 pytest tests
 
 src/
   app/
@@ -278,9 +303,10 @@ src/
     agent/vantora-copilot.ts   9 gated tools, copilot loop, synthesiser
     security/permission-gate.ts  tiers, HMAC, attestation, injection screen
     sandbox/execution-logger.ts  SHA-256 hash chain
-    sandbox/seed-data.ts       Apex dataset + Prisma/in-memory seeding
+    sandbox/seed-data.ts       Smart Jeans dataset + 3 scenario presets
+    stress-controls.ts         the 4 live dials (client-safe: no node: imports)
 
-prisma/schema.prisma           6 models, 3 enums
+prisma/schema.prisma           6 models, 5 enums
 docs/                          technical documentation, security assessment  (git-ignored)
 logs/                          the hash-chained audit ledger  (generated by a run; git-ignored)
 ```

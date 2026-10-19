@@ -22,11 +22,11 @@ import {
   type AuditLogEntry,
 } from "../../sandbox/execution-logger";
 import {
-  APEX_INVOICE_MEMOS,
+  SMART_JEANS_INVOICE_MEMOS,
   BENIGN_INVOICE_MEMO,
   MALICIOUS_INVOICE_MEMO,
-  apexFinancialState,
-  seedApexDataset,
+  smartJeansFinancialState,
+  seedSandboxDataset,
 } from "../../sandbox/seed-data";
 import {
   PERMISSION_TIERS,
@@ -53,7 +53,7 @@ beforeAll(async () => {
   process.env.HITL_SIGNING_SECRET = "test-only-hitl-signing-secret-32-chars";
   resetAuditLog();
 
-  const state = apexFinancialState();
+  const state = smartJeansFinancialState();
   forecast = localForecast(state);
   optimization = localOptimize(state, forecast);
   const plan = optimization.optimal_plan;
@@ -222,7 +222,7 @@ beforeAll(async () => {
 
 describe("end-to-end recovery workflow", () => {
   it("seeds Apex Manufacturing in memory when Supabase is not connected", async () => {
-    const seeded = await seedApexDataset();
+    const seeded = await seedSandboxDataset();
     expect(seeded.mode).toBe("in-memory");
     expect(seeded.invoices).toBe(6);
     expect(seeded.payables).toBe(7);
@@ -240,7 +240,7 @@ describe("end-to-end recovery workflow", () => {
   });
 
   it("is deterministic run to run", () => {
-    const again = localForecast(apexFinancialState());
+    const again = localForecast(smartJeansFinancialState());
     expect(again.p10_trajectory).toEqual(forecast.p10_trajectory);
     expect(again.p50_trajectory).toEqual(forecast.p50_trajectory);
     expect(again.shortfall_probability).toBe(forecast.shortfall_probability);
@@ -477,7 +477,7 @@ describe("indirect prompt injection", () => {
   });
 
   it("names the specific attack patterns in the seeded memo", () => {
-    const scan = detectIndirectPromptInjection(APEX_INVOICE_MEMOS["INV-2005"]);
+    const scan = detectIndirectPromptInjection(SMART_JEANS_INVOICE_MEMOS["INV-2005"]);
     const names = scan.matches.map((m) => m.name);
     expect(scan.injectionDetected).toBe(true);
     expect(names).toContain("system_override");

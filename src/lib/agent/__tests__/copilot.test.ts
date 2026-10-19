@@ -39,11 +39,11 @@ beforeAll(async () => {
 });
 
 describe("copilot context", () => {
-  it("loads the Apex crunch from whichever engine is serving", () => {
+  it("loads the Smart Jeans crunch from whichever engine is serving", () => {
     expect(ctx.forecast.first_shortfall_day).toBe(14);
     expect(ctx.optimization.crunch_day).toBe(14);
     expect(ctx.optimization.required_cash).toBeGreaterThan(0);
-    expect(ctx.planId).toBe("apex-recovery-d14");
+    expect(ctx.planId).toBe("smartjeans-crunch-d14");
   });
 
   it("proves the optimal plan beats both counterfactuals", () => {

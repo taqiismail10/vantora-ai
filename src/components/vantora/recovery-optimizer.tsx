@@ -2,7 +2,16 @@
 
 /** Tab 2 — Recovery Optimizer: three priced counterfactuals and the lender screen. */
 
-import { ArrowRight, BadgeCheck, Ban, CircleDollarSign, ShieldCheck, TrendingDown } from "lucide-react";
+import {
+  ArrowRight,
+  BadgeCheck,
+  Ban,
+  CircleDollarSign,
+  EyeOff,
+  Megaphone,
+  ShieldCheck,
+  TrendingDown,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -298,6 +307,9 @@ function PROTECTIVE_REASON(
   if (credit) {
     return `Credit score ${credit[1]} < ${credit[2]} minimum — blocks a wasted hard credit pull.`;
   }
+  if (reason.includes("collateral")) {
+    return "No assignable receivables — match exceptions have diluted the borrowing base to nothing.";
+  }
   return reason || "Screened out.";
 }
 
@@ -427,6 +439,23 @@ export function RecoveryOptimizer({
                     <TableCell className="font-medium">
                       <div className="whitespace-nowrap">{option.provider}</div>
                       <div className="text-[11px] text-slate-500 dark:text-slate-400">{option.id}</div>
+                      {/* Notice of Assignment is the hidden cost of factoring:
+                          the facility is priced in APR, but it is paid in the
+                          vendor relationship when your buyer is told. */}
+                      {quoted?.requires_notice_of_assignment ? (
+                        <div
+                          className="mt-0.5 flex items-start gap-1 text-[10px] leading-snug text-amber-700 dark:text-amber-400"
+                          title={quoted.notice_of_assignment_note || undefined}
+                        >
+                          <Megaphone className="mt-px size-3 shrink-0" />
+                          Notifies your buyer (NOA)
+                        </div>
+                      ) : quoted?.is_existing_facility ? (
+                        <div className="mt-0.5 flex items-start gap-1 text-[10px] leading-snug text-emerald-700 dark:text-emerald-400">
+                          <EyeOff className="mt-px size-3 shrink-0" />
+                          Confidential · already underwritten
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-slate-500 dark:text-slate-400">
                       {option.product_type.replace(/_/g, " ")}

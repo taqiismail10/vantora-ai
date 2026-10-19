@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DashboardState, RedTeamResult } from "@/lib/dashboard-state";
+import { BASELINE_STRESS, type StressControls } from "@/lib/stress-controls";
 import { cn } from "@/lib/utils";
 
 import { ActionCenter } from "./action-center";
@@ -33,27 +34,27 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const [redTeam, setRedTeam] = useState<RedTeamResult | null>(null);
   const [redTeamBusy, setRedTeamBusy] = useState(false);
   const [tab, setTab] = useState("liquidity");
-  // The profile and rho live here, not in the tabs: every refresh has to carry
-  // them or switching SME would silently snap back to Apex on the next action.
-  const [profile, setProfile] = useState(initial.profile.id);
-  const [rho, setRho] = useState(initial.correlation_rho);
+  // The preset and the four stress controls live here, not in the tabs: every
+  // refresh has to carry them or an action would silently snap the dashboard
+  // back to the baseline scenario on the next append to the chain.
+  const [preset, setPreset] = useState(initial.profile.id);
+  const [stress, setStress] = useState<StressControls>(initial.stress);
 
   // No state is set before the first `await`, so the mount effect below does not
   // trigger a cascading render (react-hooks/set-state-in-effect).
   const refresh = useCallback(
-    async (next: { profile?: string; rho?: number } = {}) => {
-      const query = { profile: next.profile ?? profile, rho: next.rho ?? rho };
+    async (next: { profile?: string } & Partial<StressControls> = {}) => {
       try {
-        setData(await fetchDashboardState(query));
+        setData(await fetchDashboardState({ profile: preset, ...stress, ...next }));
         setError(null);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     },
-    [profile, rho],
+    [preset, stress],
   );
 
-  const refreshWithSpinner = async (next: { profile?: string; rho?: number } = {}) => {
+  const refreshWithSpinner = async (next: { profile?: string } & Partial<StressControls> = {}) => {
     setRefreshing(true);
     try {
       await refresh(next);
@@ -62,15 +63,19 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
     }
   };
 
-  const switchProfile = async (next: DashboardState["profile"]["id"]) => {
-    setProfile(next);
-    setTab("liquidity"); // a new SME's verdict belongs on the first tab
-    await refreshWithSpinner({ profile: next });
+  const switchPreset = async (next: DashboardState["profile"]["id"]) => {
+    setPreset(next);
+    setTab("liquidity"); // a new scenario's verdict belongs on the first tab
+    // A preset is a scenario in its own right, so selecting one resets the
+    // dials: otherwise "healthy runway" would quietly arrive pre-stressed.
+    setStress(BASELINE_STRESS);
+    await refreshWithSpinner({ profile: next, ...BASELINE_STRESS });
   };
 
-  const switchRho = async (next: number) => {
-    setRho(next);
-    await refreshWithSpinner({ rho: next });
+  const applyStressControls = async (next: Partial<StressControls>) => {
+    const merged = { ...stress, ...next };
+    setStress(merged);
+    await refreshWithSpinner(merged);
   };
 
   const drill = async () => {
@@ -98,7 +103,8 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
         redTeamBusy={redTeamBusy}
         refreshing={refreshing}
         onRefresh={() => refreshWithSpinner()}
-        onSwitchProfile={switchProfile}
+        onSwitchPreset={switchPreset}
+        onStress={applyStressControls}
       />
 
       {/* overflow-x-hidden is the page-level guarantee: any child that
@@ -126,7 +132,7 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
             </TabsList>
 
             <TabsContent value="liquidity" className="pt-4">
-              <LiquidityRadar data={data} rho={rho} onRhoChange={switchRho} busy={refreshing} />
+              <LiquidityRadar data={data} />
             </TabsContent>
             <TabsContent value="optimizer" className="pt-4">
               <RecoveryOptimizer data={data} onApprove={() => setTab("copilot")} />

@@ -3,7 +3,7 @@
 /** Tab 1 — Liquidity Radar: where the cash breaks, and what it breaks on. */
 
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ChevronDown, ShieldAlert, ShieldCheck, Waves } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,10 +17,43 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DashboardState } from "@/lib/dashboard-state";
+import { deferralDays, deferralFeePct, pledgeableAr } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
 import { FanChart } from "./fan-chart";
 import { DeterministicBadge, KpiCard, Metric, money, money2, pct, SectionHeading } from "./primitives";
+
+/** Mirrors the ranker: these two dilute the borrowing base, the others do not. */
+const MATCH_EXCEPTIONS = new Set(["QTY_VARIANCE", "PRICE_VARIANCE"]);
+
+/** The 3-way match verdict, and what it costs the SME when it is not clean. */
+const MATCH_BADGE: Record<string, { label: string; className: string }> = {
+  MATCH_CLEAN: {
+    label: "3-way clean",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300",
+  },
+  QTY_VARIANCE: {
+    label: "GR/IR qty variance",
+    className: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  },
+  PRICE_VARIANCE: {
+    label: "GR/IR price variance",
+    className: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  },
+  MEMO_QUARANTINED: {
+    label: "memo quarantined",
+    className: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300",
+  },
+};
+
+/** Short, readable supplier archetypes for the AP table. */
+const ARCHETYPE_LABEL: Record<string, string> = {
+  MONOPOLY_STRICT: "single-source",
+  FLEXIBLE_PARTNER: "strategic partner",
+  COMMERCIAL_NEGOTIATOR: "commercial mill",
+  STATUTORY: "statutory",
+  OVERHEAD: "overhead",
+};
 
 function reliabilityTone(score: number) {
   if (score >= 0.9) return "text-emerald-600 dark:text-emerald-400";
@@ -90,27 +123,17 @@ function StruckMemo({ text, spans }: { text: string; spans: string[] }) {
   );
 }
 
-const RHO_STEPS = [
-  { value: "0", label: "0.0 Independent" },
-  { value: "0.3", label: "0.3 Moderate" },
-  { value: "0.6", label: "0.6 Sector stress" },
-];
-
-export function LiquidityRadar({
-  data,
-  rho,
-  onRhoChange,
-  busy,
-}: {
-  data: DashboardState;
-  rho: number;
-  onRhoChange: (next: number) => void;
-  busy: boolean;
-}) {
+export function LiquidityRadar({ data }: { data: DashboardState }) {
   const [showRecovery, setShowRecovery] = useState(false);
   const [showQuantMath, setShowQuantMath] = useState(false);
   const [openMemo, setOpenMemo] = useState<string | null>(null);
   const { forecast, optimization, state, memos } = data;
+  // The correlation dial lives in the header stress drawer now, beside the
+  // three other controls that perturb the same forecast. This tab reports
+  // where it was set rather than offering a second, competing copy of it.
+  const rho = data.stress.rho;
+  const pledgeable = pledgeableAr(state);
+  const dilution = state.invoices_ar.reduce((sum, i) => sum + i.amount, 0) - pledgeable;
   const crunchDay = forecast.first_shortfall_day ?? optimization.crunch_day;
   const crunchP10 = forecast.p10_trajectory[crunchDay - 1];
   const wc = forecast.working_capital_metrics;
@@ -197,21 +220,15 @@ export function LiquidityRadar({
               {showQuantMath ? "Hide" : "Show"} P90 &amp; quant math
             </Button>
 
-            <div className="ml-auto flex items-center gap-2">
-              <span
-                className="text-[11px] text-slate-500 dark:text-slate-400"
-                title="Systemic correlation between customer payment delays. Above zero the whole receivables book slips together."
-              >
-                Correlation ρ
-              </span>
-              <Segmented
-                value={String(rho)}
-                disabled={busy}
-                onChange={(next) => onRhoChange(Number(next))}
-                options={RHO_STEPS}
-              />
-              {busy ? <Loader2 className="size-3.5 animate-spin text-slate-400" /> : null}
-            </div>
+            <Badge
+              variant="outline"
+              className="ml-auto gap-1.5 font-mono text-[10px]"
+              title="Systemic correlation between buyer payment delays. Above zero the whole receivables book slips together. Set it in the header stress drawer."
+            >
+              <Waves className="size-3" />
+              ρ = {rho.toFixed(1)}
+              {rho > 0 ? " · correlated" : " · independent"}
+            </Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -273,6 +290,7 @@ export function LiquidityRadar({
                   <TableHead className="text-right">Delay (μ±σ)</TableHead>
                   <TableHead className="text-right">P90 arrival</TableHead>
                   <TableHead className="text-right">Reliability</TableHead>
+                  <TableHead>Match &amp; terms</TableHead>
                   <TableHead>Early pay</TableHead>
                   <TableHead>Memo</TableHead>
                 </TableRow>
@@ -303,10 +321,51 @@ export function LiquidityRadar({
                       >
                         {invoice.reliability_score.toFixed(2)}
                       </TableCell>
+                      <TableCell className="min-w-[11rem]">
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "font-mono text-[10px]",
+                            MATCH_BADGE[invoice.match_status ?? "MATCH_CLEAN"]?.className,
+                          )}
+                          title={invoice.match_exception_detail || undefined}
+                        >
+                          {MATCH_BADGE[invoice.match_status ?? "MATCH_CLEAN"]?.label ?? invoice.match_status}
+                        </Badge>
+                        <div className="mt-0.5 flex flex-col gap-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                          {(invoice.revenue_concentration_pct ?? 0) >= 0.3 ? (
+                            <span
+                              className="font-medium text-amber-700 dark:text-amber-400"
+                              title="Concentration risk: dunning this buyer to collect one invoice risks the rest of the book, so outbound text is clerk-signed only."
+                            >
+                              {pct(invoice.revenue_concentration_pct ?? 0, 0)} of revenue · clerk-signed only
+                            </span>
+                          ) : (
+                            <span className="tabular-nums">
+                              {pct(invoice.revenue_concentration_pct ?? 0, 0)} of revenue
+                            </span>
+                          )}
+                          {invoice.msa_governed_terms ? (
+                            <span title={invoice.terms_conflict_note || undefined}>
+                              {invoice.invoice_stated_terms} printed ·{" "}
+                              <span className="font-medium text-slate-700 dark:text-slate-300">
+                                {invoice.msa_governed_terms} governs
+                              </span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         {invoice.early_payment_discount_eligible ? (
                           <span className="tabular-nums">
                             {pct(invoice.early_payment_discount_pct ?? 0)} / {invoice.early_payment_settles_in_days}d
+                          </span>
+                        ) : MATCH_EXCEPTIONS.has(invoice.match_status ?? "") ? (
+                          <span
+                            className="text-[10px] text-amber-700 dark:text-amber-400"
+                            title="Blocked in the buyer's GR/IR exception queue: no discount, and excluded from the borrowing base until reconciled."
+                          >
+                            blocked by match
                           </span>
                         ) : (
                           <span className="text-slate-400">—</span>
@@ -336,7 +395,7 @@ export function LiquidityRadar({
                     </TableRow>,
                     expanded && memo ? (
                       <TableRow key={`${invoice.id}-memo`} className="bg-rose-50/60 hover:bg-rose-50/60 dark:bg-rose-950/20">
-                        <TableCell colSpan={8} className="p-3">
+                        <TableCell colSpan={9} className="p-3">
                           <div className="rounded-md border border-rose-200 bg-white p-3 dark:border-rose-900 dark:bg-slate-950">
                             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                               <span className="font-medium text-rose-700 dark:text-rose-300">
@@ -406,6 +465,27 @@ export function LiquidityRadar({
                       <TableCell className="font-medium">
                         <div className="whitespace-nowrap">{payable.id}</div>
                         <div className="text-[11px] text-slate-500 dark:text-slate-400">{payable.supplier_name}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
+                          <span className="font-mono">
+                            {ARCHETYPE_LABEL[payable.supplier_archetype ?? "OVERHEAD"]}
+                          </span>
+                          {payable.line_stop_risk ? (
+                            <span
+                              className="font-medium text-rose-600 dark:text-rose-400"
+                              title="Not deferrable at any price: withholding payment stops the line."
+                            >
+                              · line stop
+                            </span>
+                          ) : null}
+                          {payable.payroll_lock_day ? (
+                            <span
+                              className="font-medium text-amber-700 dark:text-amber-400"
+                              title="The bank direct-deposit file locks here. After it the run cannot be re-cut, so this is the real deadline."
+                            >
+                              · file locks d{payable.payroll_lock_day}
+                            </span>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{money(payable.amount)}</TableCell>
                       <TableCell
@@ -419,10 +499,29 @@ export function LiquidityRadar({
                       <TableCell className="tabular-nums">
                         {payable.is_flexible ? (
                           <>
-                            +{payable.max_deferral_days}d @ {pct(payable.deferral_fee_pct ?? 0, 2)}
+                            +{deferralDays(payable)}d @ {pct(deferralFeePct(payable), 2)}
+                            {(payable.past_extension_count ?? 0) >= 1 &&
+                            (payable.extension_surcharge_pct ?? 0) > 0 ? (
+                              <div
+                                className="text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                                title="Goodwill already spent: the step surcharge applies on top of the base fee."
+                              >
+                                incl. +{pct(payable.extension_surcharge_pct ?? 0, 1)} step
+                              </div>
+                            ) : null}
+                            {payable.credit_insured_by ? (
+                              <div
+                                className="text-[10px] text-slate-400"
+                                title={`${payable.credit_insured_by} withdraws cover past ${payable.insurance_revocation_day_cap ?? 30} days, which converts the account to cash-in-advance and triggers bureau reporting.`}
+                              >
+                                {payable.credit_insured_by} cap {payable.insurance_revocation_day_cap ?? 30}d
+                              </div>
+                            ) : null}
                           </>
                         ) : (
-                          <span className="text-slate-400">fixed</span>
+                          <span className="text-slate-400">
+                            {payable.is_payroll ? "statutory" : "fixed"}
+                          </span>
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -488,9 +587,21 @@ export function LiquidityRadar({
         </Card>
       ) : null}
 
-      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+      <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
         Totals: {money2(wc.total_ar_outstanding)} AR against {money2(wc.total_ap_due)} AP, average daily burn{" "}
         {money2(wc.average_daily_burn)}.
+        {/* The borrowing base is not the AR balance. A receivable the buyer's
+            own ERP has blocked cannot be assigned, so it dilutes out — which is
+            the difference between what a lender quotes and what it advances. */}
+        {dilution > 0 ? (
+          <>
+            {" "}
+            Borrowing base is <span className="font-medium tabular-nums">{money(pledgeable)}</span>, not{" "}
+            <span className="tabular-nums">{money(wc.total_ar_outstanding)}</span>:{" "}
+            <span className="tabular-nums">{money(dilution)}</span> is diluted out by unreconciled match
+            exceptions and cannot be pledged.
+          </>
+        ) : null}
       </p>
     </div>
   );

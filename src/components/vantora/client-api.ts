@@ -20,13 +20,26 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return payload as T;
 }
 
-/** `profile` switches the sandbox SME; `rho` re-runs the forecast correlated. */
+/**
+ * `profile` picks the scenario preset; the other four are the live stress
+ * controls. Baseline values are left off the query string so the canonical URL
+ * stays `/api/state`.
+ */
 export async function fetchDashboardState(
-  options: { profile?: string; rho?: number } = {},
+  options: {
+    profile?: string;
+    delayShift?: number;
+    workforce?: number;
+    rho?: number;
+    priorExtensions?: number;
+  } = {},
 ): Promise<DashboardState> {
   const query = new URLSearchParams();
   if (options.profile) query.set("profile", options.profile);
+  if (options.delayShift) query.set("delayShift", String(options.delayShift));
+  if (options.workforce && options.workforce !== 100) query.set("workforce", String(options.workforce));
   if (options.rho) query.set("rho", String(options.rho));
+  if (options.priorExtensions) query.set("priorExtensions", String(options.priorExtensions));
   const suffix = query.size ? `?${query}` : "";
   const response = await fetch(`/api/state${suffix}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`/api/state failed with ${response.status}`);

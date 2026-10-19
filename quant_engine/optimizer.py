@@ -20,6 +20,7 @@ import pulp
 from .financing_ranker import BRIDGE_TERM_DAYS, effective_cost, rank_financing
 from .forecaster import forecast
 from .schemas import (
+    ApPayable,
     ForecastResultOutput,
     MatchedFinancingOption,
     OptimizationResultOutput,
@@ -38,6 +39,26 @@ def _var_name(prefix: str, ident: str) -> str:
 def _cost_per_dollar(apr: float, origination_fee_pct: float) -> float:
     """Dollar cost of one borrowed dollar held for the 30-day bridge term."""
     return origination_fee_pct + apr * (BRIDGE_TERM_DAYS / 365.0)
+
+
+def deferral_days(ap: ApPayable) -> int:
+    """How far this bill can actually move.
+
+    Trade-credit insurers (Atradius, Coface) withdraw cover once an account runs
+    past their cap, which converts the supplier to cash-in-advance and puts the
+    SME on a bureau delinquency file. That is not a fee the optimiser may trade
+    off, so the window is clamped before the solver ever sees it.
+    """
+    return min(ap.max_deferral_days, ap.insurance_revocation_day_cap)
+
+
+def deferral_fee_pct(ap: ApPayable) -> float:
+    """Goodwill is a stock, not a rate.
+
+    A three-year partner absorbs the first schedule change at no cash surcharge.
+    Once it has been spent, the same request is priced like anyone else's.
+    """
+    return ap.deferral_fee_pct + (ap.extension_surcharge_pct if ap.past_extension_count >= 1 else 0.0)
 
 
 def _idle_plan(name: str, p10: float, notes: str) -> RecoveryPlan:
@@ -258,11 +279,18 @@ def optimize(
     ap_vars: dict[str, tuple] = {}
     risk_terms: list = []
     for ap in state.payables_ap:
+        # Wages are never a lever, whatever the record says. A seed that marked
+        # payroll flexible -- or a stress scenario that produced one -- would
+        # otherwise let the MILP buy three days of runway by deferring wages,
+        # which is a statutory breach rather than an expensive option. The
+        # boundary belongs to the engine, not to whichever fixture it is fed.
+        if ap.is_payroll:
+            continue
         if not ap.is_flexible or ap.due_day > crunch_day:
             continue
-        if ap.due_day + ap.max_deferral_days <= crunch_day:
+        if ap.due_day + deferral_days(ap) <= crunch_day:
             continue  # deferral window closes before the crunch, so it frees nothing
-        fee = ap.amount * ap.deferral_fee_pct
+        fee = ap.amount * deferral_fee_pct(ap)
         risk_cost = ap.relationship_risk * state.relationship_risk_price
         var = problem.add_variable(_var_name("y", ap.id), cat="Binary")
         ap_vars[ap.id] = (var, ap.amount, fee, risk_cost)
@@ -339,11 +367,17 @@ def optimize(
             PlanAction(
                 kind="ap_deferral",
                 target_id=ap.id,
-                label="Defer {} by {}d".format(ap.supplier_name, ap.max_deferral_days),
+                label="Defer {} by {}d".format(ap.supplier_name, deferral_days(ap)),
                 cash_impact=round(amount, 2),
                 cost=round(fee + risk_cost, 2),
-                detail="${:,.0f} deferral fee + ${:,.0f} relationship risk ({:.2f} of {:.2f} budget)".format(
-                    fee, risk_cost, ap.relationship_risk, state.max_relationship_risk
+                detail="${:,.0f} deferral fee + ${:,.0f} relationship risk ({:.2f} of {:.2f} budget){}".format(
+                    fee,
+                    risk_cost,
+                    ap.relationship_risk,
+                    state.max_relationship_risk,
+                    "; includes a {:.1%} step surcharge, goodwill already spent".format(ap.extension_surcharge_pct)
+                    if ap.past_extension_count >= 1 and ap.extension_surcharge_pct > 0
+                    else "",
                 ),
             )
         )
