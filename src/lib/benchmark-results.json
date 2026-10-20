@@ -1,0 +1,9 @@
+{
+  "scenarios": 216,
+  "identical": 144,
+  "milp_cheaper": 0,
+  "greedy_cheaper": 0,
+  "both_infeasible": 72,
+  "feasibility_disagree": 0,
+  "run_at": "2026-10-19T11:36:34.721Z"
+}

@@ -1,0 +1,230 @@
+// Vantora AI — Supabase PostgreSQL schema (Prisma 7+).
+// Connection URLs live in prisma.config.ts, not here.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PermissionTier {
+  TIER_0_AUTO_READ
+  TIER_1_DRAFT_ONLY
+  TIER_2_HITL_APPROVAL
+  TIER_3_PROHIBITED
+}
+
+enum GateDecision {
+  ALLOWED
+  DRAFTED
+  DENIED
+}
+
+enum MatchStatus {
+  MATCH_CLEAN
+  QTY_VARIANCE
+  PRICE_VARIANCE
+  MEMO_QUARANTINED
+}
+
+enum SupplierArchetype {
+  MONOPOLY_STRICT
+  FLEXIBLE_PARTNER
+  COMMERCIAL_NEGOTIATOR
+  STATUTORY
+  OVERHEAD
+}
+
+enum PlanApprovalStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  EXECUTED
+}
+
+model SmeProfile {
+  id                    String   @id @default(cuid())
+  companyName           String   @unique
+  industry              String   @default("Manufacturing")
+  currentCash           Decimal  @db.Decimal(14, 2)
+  minimumSafeBuffer     Decimal  @db.Decimal(14, 2)
+  creditScore           Int
+  monthlyRevenue        Decimal  @db.Decimal(14, 2)
+  /// Total relationship_risk the owner is willing to spend on supplier deferrals.
+  maxRelationshipRisk   Float    @default(1.0)
+  relationshipRiskPrice Decimal  @default(2000) @db.Decimal(14, 2)
+  horizonDays           Int      @default(30)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  invoices         InvoiceAR[]
+  payables         PayableAP[]
+  financingOptions FinancingOption[]
+  recoveryPlans    RecoveryPlan[]
+  auditLogs        AuditLog[]
+}
+
+model InvoiceAR {
+  id                           String  @id @default(cuid())
+  smeProfileId                 String
+  externalId                   String
+  customerName                 String
+  amount                       Decimal @db.Decimal(14, 2)
+  dueDay                       Int
+  expectedDelayDaysMean        Float
+  expectedDelayDaysStd         Float
+  reliabilityScore             Float
+  earlyPaymentDiscountEligible Boolean @default(false)
+  earlyPaymentDiscountPct      Float   @default(0.02)
+  earlyPaymentSettlesInDays    Int     @default(3)
+
+  /// Share of plant revenue this buyer represents. Drives the signatory rule:
+  /// a dominant buyer reads an owner-signed collection letter as distress.
+  revenueConcentrationPct Float       @default(0)
+  /// 3-way match (PO / goods receipt / invoice). Anything but MATCH_CLEAN is
+  /// blocked in the buyer's GR/IR queue: no early-pay discount, and excluded
+  /// from the factoring borrowing base until reconciled.
+  matchStatus             MatchStatus @default(MATCH_CLEAN)
+  matchExceptionDetail    String?
+  /// Terms as printed vs terms the MSA actually governs at. The forecaster
+  /// settles off the governing schedule, never the optimistic print.
+  invoiceStatedTerms      String?
+  msaGovernedTerms        String?
+  allowedSignatoryRole    String?
+
+  /// Free-text customer memo. UNTRUSTED: must pass detectIndirectPromptInjection
+  /// before any of it reaches a model prompt.
+  memo          String?
+  memoQuarantined Boolean @default(false)
+
+  smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([smeProfileId, externalId])
+  @@index([smeProfileId])
+}
+
+model PayableAP {
+  id                String  @id @default(cuid())
+  smeProfileId      String
+  externalId        String
+  supplierName      String
+  amount            Decimal @db.Decimal(14, 2)
+  dueDay            Int
+  isFlexible        Boolean @default(false)
+  maxDeferralDays   Int     @default(0)
+  deferralFeePct    Float   @default(0)
+  relationshipRisk  Float   @default(0)
+  lateFeePct        Float   @default(0)
+  isCritical        Boolean @default(false)
+  defaultPenalty    Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Wages. Missing it is a statutory breach, not a late fee — declared here,
+  /// never inferred from the supplier name.
+  isPayroll         Boolean @default(false)
+  /// Day the bank direct-deposit file locks. The real deadline, earlier than
+  /// the due day: after it, the run cannot be re-cut.
+  payrollLockDay    Int?
+
+  supplierArchetype SupplierArchetype @default(OVERHEAD)
+  /// Extensions already granted. Goodwill is a stock, not a rate.
+  pastExtensionCount Int    @default(0)
+  /// Added to deferralFeePct once pastExtensionCount >= 1.
+  extensionSurchargePct Float @default(0)
+  lineStopRisk      String?
+  /// Trade-credit insurer, and the window past which cover is revoked and the
+  /// account is reported. Caps the deferral the solver may propose.
+  creditInsuredBy   String?
+  insuranceRevocationDayCap Int @default(30)
+
+  smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([smeProfileId, externalId])
+  @@index([smeProfileId])
+}
+
+model FinancingOption {
+  id                 String  @id @default(cuid())
+  smeProfileId       String
+  externalId         String
+  provider           String
+  productType        String
+  maxAmount          Decimal @db.Decimal(14, 2)
+  apr                Float
+  originationFeePct  Float   @default(0)
+  minCreditScore     Int     @default(0)
+  fundingDays        Int
+  requiresArCollateral Boolean @default(false)
+  /// Advance rate against pledged AR. The complement is the uncollected-funds
+  /// reserve the factor holds back, not cash the SME can spend.
+  arCoverageRatio    Float   @default(0.8)
+  /// Already underwritten: no fresh application, no new hard credit pull.
+  isExistingFacility Boolean @default(false)
+  /// Whether the factor notifies the buyer directly. A confidential
+  /// (non-notification) line does not, which is why it is usable against a
+  /// concentrated buyer without vendor-scorecard damage.
+  requiresNoticeOfAssignment Boolean @default(false)
+  noticeOfAssignmentNote     String?
+
+  smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([smeProfileId, externalId])
+  @@index([smeProfileId])
+}
+
+model RecoveryPlan {
+  id                     String             @id @default(cuid())
+  smeProfileId           String
+  name                   String
+  crunchDay              Int
+  requiredCash           Decimal            @db.Decimal(14, 2)
+  cashRaised             Decimal            @db.Decimal(14, 2)
+  totalCost              Decimal            @db.Decimal(14, 2)
+  postRecoveryP10Balance Decimal            @db.Decimal(14, 2)
+  meetsBuffer            Boolean
+  solverStatus           String
+  /// PlanAction[] exactly as returned by the Python optimizer.
+  actions                Json
+  proofSummary           String
+  savingsVsNaive         Decimal            @db.Decimal(14, 2)
+  savingsVsDoNothing     Decimal            @db.Decimal(14, 2)
+  approvalStatus         PlanApprovalStatus @default(DRAFT)
+  approvedBy             String?
+  approvedAt             DateTime?
+  createdAt              DateTime           @default(now())
+
+  smeProfile SmeProfile @relation(fields: [smeProfileId], references: [id], onDelete: Cascade)
+  auditLogs  AuditLog[]
+
+  @@index([smeProfileId])
+}
+
+/// SHA-256 hash-chained operation log (Deliverable 06). Mirrored to
+/// logs/sandbox_operation_logs.jsonl so the chain survives without a database.
+model AuditLog {
+  id             String         @id @default(cuid())
+  /// Position in the hash chain; 1 is the genesis-linked entry.
+  seq            Int
+  smeProfileId   String?
+  recoveryPlanId String?
+  actorType      String         @default("agent")
+  actorId        String
+  operation      String
+  tier           PermissionTier
+  decision       GateDecision
+  reason         String
+  /// SHA-256 of the operation payload; the payload itself is never logged verbatim.
+  payloadDigest  String
+  prevLogHash    String
+  currentLogHash String         @unique
+  createdAt      DateTime       @default(now())
+
+  smeProfile   SmeProfile?   @relation(fields: [smeProfileId], references: [id], onDelete: SetNull)
+  recoveryPlan RecoveryPlan? @relation(fields: [recoveryPlanId], references: [id], onDelete: SetNull)
+
+  @@unique([seq])
+  @@index([createdAt])
+}

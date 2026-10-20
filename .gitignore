@@ -1,0 +1,87 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ── dependencies ──────────────────────────────────────────────────────────────
+/node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ── build output ──────────────────────────────────────────────────────────────
+/.next/
+/out/
+/build/
+/.vercel/
+/coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# ── python quant engine ───────────────────────────────────────────────────────
+/quant_engine/.venv/
+**/__pycache__/
+**/*.py[cod]
+/.pytest_cache/
+
+# ── generated code ────────────────────────────────────────────────────────────
+# Rebuilt by `npm run db:push` (prisma generate); never hand-edited.
+/src/generated/
+
+# ── runtime artefacts ─────────────────────────────────────────────────────────
+# The audit chain is evidence produced by a run, not source. It is regenerated
+# by `npx vitest run` and by using the app.
+/logs/
+# App database: accounts, sessions, approvals, sandbox executions. Never commit.
+/data/
+*.log
+*.jsonl
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── local-only documentation ──────────────────────────────────────────────────
+/docs/
+
+# ── tracked submission copy (exempt from the *.jsonl rule above) ──────────────
+!/documentation/**/*.jsonl
+
+# ── agent / editor tooling ────────────────────────────────────────────────────
+/.agents/
+/.claude/
+/.cursor/
+/.devin/
+/.vscode/
+/.idea/
+/.playwright-mcp/
+/.serena/
+/CLAUDE.md
+/AGENTS.md
+
+# ── scratch / test output ─────────────────────────────────────────────────────
+/tmp/
+
+# ── env files ─────────────────────────────────────────────────────────────────
+.env*
+!.env.example
+
+# ── misc ──────────────────────────────────────────────────────────────────────
+.DS_Store
+*.pem
+
+# ── local docs & assets ───────────────────────────────────────────────────────
+/Vantora AI Master Execution Plan.md
+/Screenshot 2026-10-19 222925.png
+/Screenshot 2026-10-19 222937.png
+/Screenshot 2026-10-19 222947.png
+/FinTechathon.pdf
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
