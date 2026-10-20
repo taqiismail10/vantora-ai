@@ -16,7 +16,7 @@ Vantora AI detects a small manufacturer's liquidity collision fourteen days befo
 <p align="center">
 <a href="https://github.com/taqiismail10/vantora-ai/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"/></a>
 <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/></a>
-<img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-116%20files-3178c6?style=flat-square&logo=typescript&logoColor=white">
+<img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-133%20files-3178c6?style=flat-square&logo=typescript&logoColor=white">
 <img alt="Python" src="https://img.shields.io/badge/Python-9%20files-3776ab?style=flat-square&logo=python&logoColor=white">
 <br/>
 <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
@@ -34,9 +34,9 @@ Vantora AI detects a small manufacturer's liquidity collision fourteen days befo
 | | |
 |---|---|
 | **Track** | FinTechathon Topic E — SME Finance Copilot ("AI as a Financial Participant") |
-| **Tests** | **220 passing** — 186 Vitest + 34 pytest (2 of the Vitest cases compare against the live Python engine and skip when it is down) |
+| **Tests** | **421 passing** — 386 Vitest (2 skip without the live Python engine) + 35 pytest, across 24 Vitest files spanning the quant engine bridge, the security kernel, and the multi-tenant company/records/CSV-import/recurrence/settlements/invitations/monitoring layer |
 | **Stack** | Next.js 16 (App Router, TS) · Better Auth (SQLite via `node:sqlite`) · Google Gemini (`@google/genai`) or OpenRouter (chat completions) · FastAPI · NumPy/SciPy · PuLP + HiGHS · Recharts · shadcn/ui |
-| **Access** | Email + password sign-in; roles OWNER / ANALYST / VIEWER provisioned by the owner. No public sign-up |
+| **Access** | Email + password. Self-service sign-up is on by default (`VANTORA_PUBLIC_SIGNUP=off` to restrict to owner-provisioned accounts) — a new account starts with no access anywhere and must create its own company or redeem an owner's invite link. Roles (OWNER / ANALYST / VIEWER) are per-company membership rows |
 | **License** | MIT |
 | **Minimum configuration** | Two secrets (`BETTER_AUTH_SECRET`, `HITL_SIGNING_SECRET`) and one owner account. No cloud database, no model key and no Python process required |
 
@@ -114,8 +114,8 @@ The header chip shows the configured provider and model, and each answer is labe
 ### Verifying the claims
 
 ```bash
-npx vitest run                                                          # 186 tests (2 need the Python engine)
-quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -q   # 34 tests
+npx vitest run                                                          # 386 tests (2 need the Python engine)
+quant_engine/.venv/Scripts/python.exe -m pytest quant_engine/tests -q   # 35 tests
 npm run lint && npx tsc --noEmit && npm run build                       # clean
 npm run benchmark       # MILP vs greedy on all 216 scenario combinations (needs `npm run quant`)
 npm run verify-evidence -- docs/evidence/session-2026-10-19/sandbox_operation_logs.jsonl
@@ -125,16 +125,16 @@ Tests never touch the application audit chain, the app database or the frozen ev
 
 ### Submission contents
 
-| Checklist item | Where |
-|---|---|
-| 01 Technical documentation | `docs/01_Technical_Documentation.pdf` (source `.md` alongside) |
-| 02 Presentation deck | `docs/02_Presentation_Deck.pdf` |
-| 03 Demo video | recorded by the team — script in `docs/VANTORA_IMPLEMENTATION_STATUS.md` §8 |
-| 04 Source code | this repository: README, run instructions above, tests under `src/**/__tests__` and `quant_engine/tests` |
-| 05 Security self-assessment | `docs/05_Security_Self_Assessment_Report.pdf` |
-| 06 Execution evidence | `docs/evidence/session-2026-10-19/` (hash-chained log + screenshots + how it was produced) |
+All six checklist items live in [`documentation/`](documentation/), the only deliverables folder that is actually tracked in git — `docs/` is git-ignored and used purely as the team's local working directory (drafts, LaTeX source, internal review notes), so nothing under it is reachable from this repository on GitHub.
 
-`docs/` is git-ignored by the team's choice; the deliverables are uploaded to the competition portal and attached to the GitHub release.
+| Checklist item | Where | Status |
+|---|---|---|
+| 01 Technical documentation | [`documentation/01_Technical_Documentation.pdf`](documentation/01_Technical_Documentation.pdf) — system architecture, core algorithm description, security design; compiled from `docs/latex/main.tex` | Current — covers the multi-tenant company platform (§4.5) |
+| 02 Presentation deck | [`documentation/Vantora AI An SME Finance Copilot for Cash Flow Recovery.pdf`](<documentation/Vantora AI An SME Finance Copilot for Cash Flow Recovery.pdf>) (`.pptx` alongside) | Current |
+| 03 Demo video | — | **Not recorded yet.** Script in `docs/VANTORA_IMPLEMENTATION_STATUS.md` §5.1 |
+| 04 Source code | this repository: README, run instructions above, tests under `src/**/__tests__` and `quant_engine/tests` | Current |
+| 05 Security self-assessment | [`documentation/05_Security_Self_Assessment_Report.pdf`](documentation/05_Security_Self_Assessment_Report.pdf) | **Predates the multi-tenant platform, not yet regenerated.** `documentation/01_Technical_Documentation.pdf` Chapter 4 ("Security Design") covers the same ground — permission tiers, attestation, injection screen, ledger, known-risk register — plus the newer multi-tenant controls, and can stand in until 05 is regenerated as its own document |
+| 06 Execution evidence | [`documentation/evidence/session-2026-10-19/`](documentation/evidence/session-2026-10-19/) (hash-chained sandbox operation log + screenshots + how it was produced) | Logs and screenshots done; the rule requires a **demo video** alongside the sandbox log for non-on-chain topics (item 3) — still outstanding |
 
 ---
 
@@ -228,7 +228,7 @@ Technical Denim & Apparel, Plant #4. 100 shift operators (scalable to 160 on pea
 
 Thin margins are the whole point: 16% of $185,000 is roughly $29,600 of gross profit a month to carry rent, utilities and overhead. A $74,700 timing gap is not a cash-flow wobble at that scale, it is the business.
 
-Vantora is single-tenant: there is one plant, and the header carries a **supply-chain stress simulator** over it — three one-click scenario presets and four live dials — rather than a switcher between unrelated companies. Preset 1 with every dial at rest is the canonical dataset below.
+This plant is Vantora's seeded **demonstration company** — permanently read-only, and the one the evidence in §5.6 and `docs/evidence/` was produced against. The platform itself is multi-tenant (§4.5): a real company's dashboard looks the same but has no stress simulator over it, since there is nothing to stress-test about data someone actually entered. On the demo company specifically, the header carries a **supply-chain stress simulator** — three one-click scenario presets and four live dials — instead of showing one fixed dataset. Preset 1 with every dial at rest is the canonical dataset below.
 
 | Preset | Band | Shape |
 |---|---|---|
@@ -294,6 +294,22 @@ Heritage SBA is the cheapest capital on the board and is still correctly refused
 | **Buyer power asymmetry** | `INV-2002` Zara, 38% concentration | `allowed_signatory_role: AR_CLERK_OR_CONTROLLER_ONLY`. Outbound text is clerk-signed and framed as a treasury yield; an owner-signed collection letter from a supplier holding 38% of their volume reads as distress |
 | **3-way match exception** | `INV-2001` Kenneth Cole, `QTY_VARIANCE` | A 60-unit GRN variance has the buyer's ERP holding the invoice. No early-pay discount, **and excluded from the factoring borrowing base** — $52,000 of the $198,000 AR ledger is diluted out. Vantora stages a clerk-signed reconciliation request instead |
 | **MSA vs invoice terms** | `INV-2003` Urban Retail | Invoice prints Net-30; MSA §4.2 governs at Net-60. The forecaster settles off the governing schedule, never the optimistic print |
+
+---
+
+## 4.5 Multi-tenant company platform
+
+Everything above describes the seeded demo. A real **company** (`src/lib/server/companies.ts`) is a genuine tenant: its id is the same `business_id` used by membership, approvals, executions and the audit chain, so there is no separate "account" concept layered on top. Creating one is atomic — the company row and an `OWNER` membership row for its creator are inserted in a single transaction, so a company is never, even momentarily, unowned, and a caller can never choose its own role.
+
+- **Onboarding** (`/onboarding`) is a resumable, server-tracked wizard (`profile → accounts → records → policy → done`); the step lives on the company row, not in client state.
+- **Records** (`records.ts`): accounts, counterparties, receivables, payables and financing facilities, every query scoped by company id. A posted invoice's terms are snapshotted from its counterparty at creation and never silently rewritten by a later edit to that counterparty's defaults.
+- **CSV import** (`csv-import.ts`) is two-pass with no trust placed in the client between passes: preview classifies and writes nothing; commit re-validates every row from scratch server-side and refuses the whole batch if any row still fails. A counterparty is matched by exact/case-insensitive name only — never auto-created.
+- **Recurring obligations** (`recurrence.ts`) support weekly/monthly schedules with no background scheduler; occurrences are previewed, then materialised into ordinary `payable` rows only on explicit user action, through the same entry path a manually typed bill uses.
+- **Settlements** (`settlements.ts`): payments, adjustments and allocations, each idempotency-keyed; nothing is ever edited or deleted — a correction is a new, explicitly linked reversal row.
+- **Invitations** (`invitations.ts`): a 24-byte single-use token, only its SHA-256 hash persisted, 7-day expiry, and — the control that actually matters — redemption requires the accepting session's own e-mail to match the invited address exactly. No e-mail is sent by the server; the owner is shown a one-time link and distributes it themselves. A company can never be left with zero owners.
+- **Honesty surface** (`company-state.ts`): a real company's records are assembled into the same input contract the quant engine already expects. Nothing is ever silently dropped (an overdue or beyond-horizon bill is still counted), and an absent figure is never treated as permissive (unstated deferral terms fix a bill rather than freeing it). Each such substitution is surfaced as a typed `CoverageNote`, not absorbed into a number.
+
+**A known gap, found while auditing this for the submission:** the copilot's system prompt and its outbound-draft signature line are still built from a module-level constant naming the demo company, not the real company a request is scoped to — see §9.
 
 ---
 
@@ -386,23 +402,33 @@ quant_engine/                  Python quantitative engine
   optimizer.py                 MILP (PuLP + HiGHS) + counterfactuals
   financing_ranker.py          deterministic eligibility screen
   main.py                      FastAPI: /api/quant/{forecast,optimize}, /health
-  tests/                       34 pytest tests
+  tests/                       35 pytest tests
 
 src/
   app/
     page.tsx                   server-rendered first payload
     api/state|action|copilot/  the three routes
-  components/vantora/          dashboard, 4 tabs, fan chart, primitives
+    api/company/                multi-tenant CRUD: ~30 actions (records, CSV, recurring, settlements, invitations)
+    api/ai-connection/, api/monitoring/  per-company AI credentials; monitoring mandates
+    onboarding/, signup/, accept-invite/, records/  multi-tenant pages
+  components/vantora/          dashboard, 4 tabs, fan chart, primitives, onboarding/records/settlement forms
   lib/
     quant-client.ts            engine bridge + deterministic TS mirror
     dashboard-data.ts          single payload builder (server + route)
     agent/vantora-copilot.ts   10 gated tools, deterministic synthesiser
     security/permission-gate.ts  tiers, HMAC, attestation, injection screen
     sandbox/execution-logger.ts  SHA-256 hash chain
-    sandbox/seed-data.ts       Smart Jeans dataset + 3 scenario presets
+    sandbox/seed-data.ts       Smart Jeans demo dataset + 3 scenario presets
     stress-controls.ts         the 4 live dials (client-safe: no node: imports)
-    server/auth.ts             Better Auth config (no public sign-up)
-    server/identity.ts         session → role/business, capabilities, CSRF/origin check
+    server/auth.ts             Better Auth config; self-service sign-up on by default
+    server/identity.ts         session → per-company role/business, capabilities, CSRF/origin check
+    server/companies.ts        tenancy root: company CRUD, membership, onboarding wizard, policy
+    server/invitations.ts      hashed single-use invite tokens, email-bound acceptance
+    server/records.ts          accounts/counterparties/receivables/payables/facilities, company-scoped
+    server/csv-import.ts       two-pass, server-revalidated bulk import
+    server/recurrence.ts       weekly/monthly recurring obligations, no background scheduler
+    server/settlements.ts      payments/adjustments/allocations, idempotency-keyed, reversal not deletion
+    server/company-state.ts    assembles a real company's forecastable state; CoverageNote honesty surface
     server/plan.ts             scenario parsing, plan version, sandbox position, action specs, validation
     server/approvals.ts        DB-bound approvals, atomic execution, counterparty simulation
     server/agent-tools.ts      what a model-requested tool may do
@@ -410,7 +436,7 @@ src/
     agent/gemini.ts, openrouter.ts  provider adapters
     agent/ask.ts               fallback and attestation
     agent/monitoring-agent.ts  bounded tool loop for a monitoring run + labelled fallback
-    server/ai-connection.ts    per-company encrypted model credential, capability test
+    server/ai-connection.ts    per-company AES-256-GCM encrypted model credential, capability test
     server/monitoring.ts       mandate CRUD, run history, worker heartbeat
 worker/
   monitoring-worker.ts         persistent poller: claims due mandates, runs the agent
@@ -444,6 +470,8 @@ See [`.env.example`](.env.example).
 | `QUANT_ENGINE_URL` | no | defaults to `http://127.0.0.1:8000`; unreachable → TypeScript mirror |
 | `VANTORA_DB_PATH` / `VANTORA_AUDIT_LOG` | no | `data/vantora.db` / `logs/sandbox_operation_logs.jsonl` |
 | `DATABASE_URL` / `DIRECT_URL` | no | in-memory synthetic ledger (accounts and approvals always use the SQLite file) |
+| `VANTORA_PUBLIC_SIGNUP` | no | defaults to on; set to `off` to restrict account creation to the owner-run CLI |
+| `AI_CREDENTIAL_ENCRYPTION_KEY` | **yes**, for per-company AI connections | 64 hex characters (32 bytes); without it, every `/api/ai-connection` operation is refused |
 
 ---
 
@@ -452,7 +480,9 @@ See [`.env.example`](.env.example).
 Stated plainly, because a security project that hides its own caveats has missed the point.
 
 - **Synthetic data.** The canonical day-14 scenario was hand-designed to illustrate a payroll collision. Behaviour is exercised across three regimes and all 216 stress combinations by the tests and the benchmark, but there is no import of real books yet.
-- **The 30-day ledger has no recurring obligations.** The day 15–45 echo check therefore says only that the obligations it can see — including the ones the plan creates — are funded; it cannot assess next month's payroll, rent or utilities.
+- **The demo company's fixed 30-day ledger has no recurring obligations**, so its day 15–45 echo check says only that the obligations it can see — including the ones the plan creates — are funded; it cannot assess next month's payroll, rent or utilities. A real company can model recurring obligations (`recurrence.ts`, §4.5); the demo dataset specifically does not, by design, since it exists to demonstrate one hand-authored collision.
+- **AI-drafted correspondence is not yet company-scoped.** The copilot's system prompt and its outbound-draft signature line are built from a constant naming the demo company, not the real company a request is scoped to — identified during this submission's security audit, not yet fixed. This affects only free-text prose in drafts a human owner reviews before sending; every dollar figure a tool returns remains correctly scoped per company and independently passes numerical attestation.
+- **Invitations are link-only.** The server never sends invitation e-mail; the owner is shown a one-time link and must distribute it themselves. A deliberate scope decision, not an oversight.
 - **The TypeScript mirror is a greedy heuristic.** It matches the MILP on every shipped scenario (benchmark above), but Python is authoritative whenever reachable, and the Plan B re-solves always use the mirror.
 - **Authentication is password-only.** No MFA or step-up for approvals, no email verification, no password reset flow (the owner re-provisions). Rate limiting is Better Auth's in-memory limiter, per process.
 - **Single-writer storage.** SQLite serialises writers and the approval/execution transaction is atomic, but the audit chain's JSONL file still assumes one writer per file.
