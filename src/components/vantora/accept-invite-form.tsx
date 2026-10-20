@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CircleCheck, LoaderCircle } from "lucide-react";
 
 import { SessionExpiredError } from "./client-api";
 import { companyAction } from "./company-api";
@@ -60,7 +60,7 @@ export function AcceptInviteForm() {
   if (state === "done") {
     return (
       <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
-        <CheckCircle2 className="size-8 text-emerald-600 dark:text-emerald-400" aria-hidden />
+        <CircleCheck className="size-8 text-emerald-600 dark:text-emerald-400" aria-hidden />
         <p className="text-sm text-slate-700 dark:text-slate-300">You now have access to this company.</p>
         <Link href="/" className="text-sm font-medium text-sky-700 hover:underline dark:text-sky-400">
           Go to the dashboard
@@ -99,7 +99,7 @@ export function AcceptInviteForm() {
 
   return (
     <p role="status" className="text-xs text-slate-500 dark:text-slate-400">
-      <Loader2 className="mr-2 inline size-3.5 animate-spin" aria-hidden />
+      <LoaderCircle className="mr-2 inline size-3.5 animate-spin" aria-hidden />
       Checking this invitation…
     </p>
   );

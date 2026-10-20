@@ -2,18 +2,17 @@
 
 /** The top status bar: which SME is loaded, what is serving the numbers, and is the ledger intact. */
 
-import { useState } from "react";
-import { Activity, Cpu, Download, Loader2, LogOut, Shield, ShieldAlert, ShieldCheck, Table2, UserRound } from "lucide-react";
+import { Activity, Cpu, Download, LoaderCircle, Shield, ShieldAlert, ShieldCheck, Table2 } from "lucide-react";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { authClient } from "@/lib/auth-client";
 import type { DashboardState } from "@/lib/dashboard-state";
 import type { StressControls } from "@/lib/stress-controls";
 import { PROVIDER_LABEL } from "@/lib/agent/llm";
 import { cn } from "@/lib/utils";
 
+import { AccountMenu } from "./account-menu";
 import { CompanySwitcher } from "./company-switcher";
 import { StressController } from "./stress-controller";
 
@@ -31,7 +30,7 @@ function chainStatus(verification: DashboardState["audit"]["verification"]) {
     return {
       label: `VERIFIED (${verification.length}/${verification.length})`,
       className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-      icon: <ShieldCheck className="size-3" />,
+      icon: <ShieldCheck className="size-3" aria-hidden />,
     };
   }
   const truncated = verification.reason === "sequence gap or reorder";
@@ -39,12 +38,12 @@ function chainStatus(verification: DashboardState["audit"]["verification"]) {
     ? {
         label: `TRUNCATED at seq ${verification.brokenAtSeq}`,
         className: "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300",
-        icon: <ShieldAlert className="size-3" />,
+        icon: <ShieldAlert className="size-3" aria-hidden />,
       }
     : {
         label: `TAMPERED at seq ${verification.brokenAtSeq}`,
         className: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
-        icon: <ShieldAlert className="size-3" />,
+        icon: <ShieldAlert className="size-3" aria-hidden />,
       };
 }
 
@@ -67,17 +66,7 @@ export function StatusBar({
 }) {
   const live = data.engine.optimization_source === "python-fastapi";
   const chain = chainStatus(data.audit.verification);
-  const [signingOut, setSigningOut] = useState(false);
   const canAnalyze = data.viewer.capabilities.includes("analyze");
-  const expires = new Date(data.viewer.session_expires_at);
-
-  const signOut = async () => {
-    setSigningOut(true);
-    await authClient.signOut();
-    // Full navigation so nothing of this session survives in the client cache.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full reload on an identity change
-    window.location.assign("/login?reason=signed_out");
-  };
 
   const download = () => {
     const jsonl = data.audit.entries.map((entry) => JSON.stringify(entry)).join("\n");
@@ -120,7 +109,7 @@ export function StatusBar({
               : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
           )}
         >
-          <Cpu className="size-3" />
+          <Cpu className="size-3" aria-hidden />
           {live ? "Python HiGHS MILP Engine: Connected" : "Deterministic TS Mirror: Active"}
         </Badge>
 
@@ -156,7 +145,7 @@ export function StatusBar({
             </Link>
           )}
           <Button size="sm" variant="outline" onClick={onRefresh} disabled={refreshing} className="text-[11px]">
-            {refreshing ? <Loader2 className="size-4 animate-spin" /> : null}
+            {refreshing ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
             Refresh
           </Button>
           {/* Outline, not destructive: running the drill is a safe, routine
@@ -170,32 +159,22 @@ export function StatusBar({
             className="text-[11px]"
           >
             {redTeamBusy ? (
-              <Loader2 className="size-4 animate-spin" />
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
             ) : (
-              <Shield className="size-4 text-slate-500 dark:text-slate-400" />
+              <Shield className="size-4 text-slate-500 dark:text-slate-400" aria-hidden />
             )}
             Run red-team security drill
           </Button>
           <Button size="sm" variant="outline" onClick={download} className="text-[11px]">
-            <Download className="size-4" />
+            <Download className="size-4" aria-hidden />
             Download audit logs (.jsonl)
           </Button>
-          <div className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2 py-1 dark:border-slate-800">
-            <UserRound className="size-3.5 text-slate-500" aria-hidden />
-            <span className="max-w-[12rem] truncate text-[11px]" title={data.viewer.email}>
-              {data.viewer.name}
-            </span>
-            <Badge variant="outline" className="font-mono text-[10px]">
-              {data.viewer.role}
-            </Badge>
-            <span className="hidden text-[10px] text-slate-500 sm:inline dark:text-slate-400">
-              session until {expires.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-            <Button size="sm" variant="ghost" onClick={signOut} disabled={signingOut} className="h-6 px-1.5 text-[11px]">
-              {signingOut ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <LogOut className="size-3.5" aria-hidden />}
-              Sign out
-            </Button>
-          </div>
+          <AccountMenu
+            name={data.viewer.name}
+            email={data.viewer.email}
+            role={data.viewer.role}
+            sessionExpiresAt={data.viewer.session_expires_at}
+          />
         </div>
       </div>
     </header>

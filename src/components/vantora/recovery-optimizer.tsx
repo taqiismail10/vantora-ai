@@ -29,7 +29,7 @@ import type { PermissionTier } from "@/lib/security/permission-gate";
 import type { RecoveryPlanResult } from "@/lib/quant-client";
 import { cn } from "@/lib/utils";
 
-import { StatusChip } from "./execution-queue";
+import { StatusChip, LifecycleChain } from "./execution-queue";
 
 import { CounterpartyFallbacks, EchoSolvencyCheck, PLAN_B_ANCHOR, PlanBJumpHint } from "./plan-resilience";
 import {
@@ -66,6 +66,87 @@ function riskScore(data: DashboardState, plan: RecoveryPlanResult) {
     label: `${consumed.toFixed(2)} of ${budget.toFixed(2)} budget`,
     tone: consumed > budget * 0.75 ? ("warn" as const) : ("good" as const),
   };
+}
+
+/**
+ * The three numbers a decision rests on, grouped the way the design-mandate
+ * recovery-plan screen groups them. Every value here is one the engine already
+ * produced for this payload — nothing is derived or invented, and the "if
+ * accepted" wording stays with the cash that is still only an offer.
+ */
+function RecoveryStatStrip({ data }: { data: DashboardState }) {
+  const { money, money2 } = useMoney();
+  const o = data.optimization;
+  const b = data.cost_breakdown;
+  const feasible = o.optimal_plan.feasible;
+
+  const cells = [
+    {
+      label: `Shortfall to close · day ${o.crunch_day} crunch`,
+      value: money(o.required_cash),
+      note: `The projected P10 dips below the operating buffer on day ${o.crunch_day}.`,
+    },
+    {
+      label: "Cash raised if every offer is accepted",
+      value: feasible && o.optimal_plan.cash_raised > 0 ? money2(o.optimal_plan.cash_raised) : "—",
+      note: "Projected — the offers are drafts until the counterparties accept; nothing is received yet.",
+    },
+    {
+      label: "Recovery cost of the recommended plan",
+      value: feasible ? money2(b.total_cents / 100) : "no feasible plan",
+      note: feasible
+        ? `${money2(b.cash_cents / 100)} in cash · ${money2(b.risk_cents / 100)} modelled relationship risk (not cash) — split below.`
+        : "Nothing closes this gap within the hard constraints.",
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-1 divide-y divide-slate-200 rounded-lg border border-slate-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-slate-800 dark:border-slate-800">
+      {cells.map((cell) => (
+        <div key={cell.label} className="px-3.5 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+            {cell.label}
+          </div>
+          <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-slate-900 dark:text-slate-100">
+            {cell.value}
+          </div>
+          <p className="mt-0.5 text-[10px] leading-snug text-slate-500 dark:text-slate-400">{cell.note}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** What the recommended plan's cost is made of, carried in the split the solver reports. */
+function CostSplitPanel({ data }: { data: DashboardState }) {
+  const { money2 } = useMoney();
+  const b = data.cost_breakdown;
+  return (
+    <div className="grid gap-2 rounded-md border border-slate-200 p-2.5 sm:grid-cols-2 dark:border-slate-800">
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+          Cash the plan puts in motion
+        </div>
+        <div className="mt-0.5 text-lg font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+          {money2(b.cash_cents / 100)}
+        </div>
+        <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+          Projected benefit. It counts as received only when an offer settles in the sandbox.
+        </p>
+      </div>
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+          Modelled relationship risk — not cash
+        </div>
+        <div className="mt-0.5 text-lg font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+          {money2(b.risk_cents / 100)}
+        </div>
+        <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+          The solver&apos;s priced strain on suppliers. It is part of the cost, and it never settles as money.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function PlanCard({
@@ -133,6 +214,7 @@ function PlanCard({
         {savings ? (
           <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{savings}</div>
         ) : null}
+        {recommended ? <CostSplitPanel data={data} /> : null}
         <div className="flex flex-wrap gap-1.5 pt-1">
           <DeterministicBadge method={method} />
           <Badge
@@ -165,6 +247,11 @@ function PlanCard({
           <Metric label="Risk score" value={risk.label} tone={risk.tone} mono={false} />
         </div>
         <div className="flex flex-col gap-2">
+          {plan.actions.length ? (
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+              Levers in this plan ({plan.actions.length})
+            </div>
+          ) : null}
           {plan.actions.map((action, index) => (
             <div
               key={`${action.kind}-${action.target_id}-${index}`}
@@ -208,6 +295,13 @@ function PlanCard({
             <PlanBJumpHint />
           </div>
         ) : null}
+        {recommended && onApprove && plan.feasible && data.viewer.capabilities.includes("approve") && data.execution.bundle ? (
+          <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+            Approval is one decision covering all {data.execution.bundle.action_keys.length} remaining actions (
+            {money2(data.execution.bundle.cash_cost_cents / 100)} in cash, with the confirmation figure typed back
+            exactly). It binds this plan version and scenario, works once, and expires within 5 minutes.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -226,7 +320,7 @@ function PayrollBreachCallout({ data }: { data: DashboardState }) {
   return (
     <div className="rounded-md border border-slate-900 bg-slate-900 px-2.5 py-2 text-slate-100 dark:border-slate-100/20">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-rose-400">
-        <Ban className="size-3.5 shrink-0" />
+        <Ban className="size-3.5 shrink-0" aria-hidden />
         Statutory payroll breach (infeasible)
       </div>
       <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
@@ -347,6 +441,8 @@ export function RecoveryOptimizer({
 
   return (
     <div className="flex flex-col gap-4">
+      <RecoveryStatStrip data={data} />
+
       <div className="grid gap-4 xl:grid-cols-3">
         <PlanCard
           data={data}
@@ -357,9 +453,7 @@ export function RecoveryOptimizer({
           caption={`Minimum-cost mix closing the ${money(o.required_cash)} day-${o.crunch_day} gap.`}
           savings={
             o.optimal_plan.feasible
-              ? `${money2(data.cost_breakdown.cash_cents / 100)} cash + ${money2(
-                  data.cost_breakdown.risk_cents / 100,
-                )} modelled relationship risk · ${money2(o.savings_vs_naive)} below naive borrowing on the same objective`
+              ? `${money2(o.savings_vs_naive)} below naive borrowing on the same objective`
               : undefined
           }
           method={
@@ -369,7 +463,7 @@ export function RecoveryOptimizer({
           }
           tier="TIER_2_HITL_APPROVAL"
           tone="good"
-          icon={<BadgeCheck className="size-4" />}
+          icon={<BadgeCheck className="size-4" aria-hidden />}
         />
         <PlanCard
           data={data}
@@ -379,7 +473,7 @@ export function RecoveryOptimizer({
           method="Closed-form cost"
           tier="TIER_2_HITL_APPROVAL"
           tone="warn"
-          icon={<CircleDollarSign className="size-4" />}
+          icon={<CircleDollarSign className="size-4" aria-hidden />}
         />
         <PlanCard
           data={data}
@@ -389,7 +483,7 @@ export function RecoveryOptimizer({
           method="Penalty schedule"
           tier="TIER_0_AUTO_READ"
           tone="bad"
-          icon={<TrendingDown className="size-4" />}
+          icon={<TrendingDown className="size-4" aria-hidden />}
         />
       </div>
 
@@ -414,7 +508,7 @@ export function RecoveryOptimizer({
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0">
-          <Table className="text-xs">
+          <Table containerLabel="Financing facilities matrix" className="text-xs">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10">#</TableHead>
@@ -445,7 +539,7 @@ export function RecoveryOptimizer({
                       )}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        {group.good ? <BadgeCheck className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
+                        {group.good ? <BadgeCheck className="size-3.5" aria-hidden /> : <ShieldCheck className="size-3.5" aria-hidden />}
                         {group.label}
                       </span>
                     </TableCell>
@@ -474,12 +568,12 @@ export function RecoveryOptimizer({
                           className="mt-0.5 flex items-start gap-1 text-[10px] leading-snug text-amber-700 dark:text-amber-400"
                           title={quoted.notice_of_assignment_note || undefined}
                         >
-                          <Megaphone className="mt-px size-3 shrink-0" />
+                          <Megaphone className="mt-px size-3 shrink-0" aria-hidden />
                           Notifies your buyer (NOA)
                         </div>
                       ) : quoted?.is_existing_facility ? (
                         <div className="mt-0.5 flex items-start gap-1 text-[10px] leading-snug text-emerald-700 dark:text-emerald-400">
-                          <EyeOff className="mt-px size-3 shrink-0" />
+                          <EyeOff className="mt-px size-3 shrink-0" aria-hidden />
                           Confidential · already underwritten
                         </div>
                       ) : null}
@@ -504,7 +598,7 @@ export function RecoveryOptimizer({
                     <TableCell className="min-w-[18rem]">
                       {option.eligible ? (
                         <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
-                          <BadgeCheck className="size-3" />
+                          <BadgeCheck className="size-3" aria-hidden />
                           {used ? `matched · ${money2(used.cash_impact)} drawn` : "eligible"}
                         </span>
                       ) : (
@@ -512,7 +606,7 @@ export function RecoveryOptimizer({
                         // predicate: a rejection should feel like cover, not
                         // like the owner failing a test.
                         <span className="inline-flex items-start gap-1 text-slate-600 dark:text-slate-400">
-                          <Ban className="mt-0.5 size-3 shrink-0" />
+                          <Ban className="mt-0.5 size-3 shrink-0" aria-hidden />
                           {PROTECTIVE_REASON(option, o.crunch_day)}
                         </span>
                       )}
@@ -545,8 +639,9 @@ function PlanActionStatus({ data, kind, target }: { data: DashboardState; kind: 
   const record = data.execution.actions.find((a) => a.kind === kind && a.target_id === target);
   if (!record) return null;
   return (
-    <div className="mt-1.5">
+    <div className="mt-1.5 flex flex-col gap-0.5">
       <StatusChip status={record.status} kind={record.kind} />
+      <LifecycleChain action={record} />
     </div>
   );
 }

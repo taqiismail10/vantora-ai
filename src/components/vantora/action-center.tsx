@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { FileWarning, Loader2, Send, Sparkles } from "lucide-react";
+import { FileWarning, LoaderCircle, Send, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -172,7 +172,7 @@ export function ActionCenter({
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Sparkles className="size-4 text-amber-700 dark:text-amber-400" />
+                <Sparkles className="size-4 text-amber-700 dark:text-amber-400" aria-hidden />
                 Copilot briefing
               </CardTitle>
               <div className="flex flex-wrap gap-1.5">
@@ -239,7 +239,7 @@ export function ActionCenter({
                 className="h-9 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus-visible:border-slate-400 dark:border-slate-800 dark:bg-slate-950"
               />
               <Button type="submit" size="sm" disabled={busy !== null || !question.trim() || !canAsk}>
-                {busy === "ask" ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                {busy === "ask" ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Send className="size-4" aria-hidden />}
                 Ask
               </Button>
             </form>
@@ -272,6 +272,21 @@ export function ActionCenter({
                 <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-700 dark:text-slate-300">
                   {turn.answer}
                 </p>
+                {turn.attested ? (
+                  <p className="mt-2.5 border-t border-slate-100 pt-1.5 text-[10px] leading-relaxed text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    {turn.numericalIntegrity.checkedDollarFigures.length ||
+                    turn.numericalIntegrity.checkedPercentages.length ? (
+                      <>
+                      Figures checked: {turn.numericalIntegrity.checkedDollarFigures.length === 1 ? "1 dollar figure" : `${turn.numericalIntegrity.checkedDollarFigures.length} dollar figures`} and{" "}
+                      {turn.numericalIntegrity.checkedPercentages.length === 1 ? "1 percentage" : `${turn.numericalIntegrity.checkedPercentages.length} percentages`} matched against the
+                      engine&apos;s own output before this answer was shown. The check covers the numbers, not the
+                      wording.
+                      </>
+                    ) : (
+                      "Figures checked: none were quoted in this answer — nothing needed matching."
+                    )}
+                  </p>
+                ) : null}
                 {turn.tool_runs.length ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {turn.tool_runs.map((run) => (
@@ -318,7 +333,7 @@ export function ActionCenter({
                 className="justify-start text-[11px]"
               >
                 {busy === "draft_customer_discount_offer" ? (
-                  <Loader2 className="size-4 animate-spin" />
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden />
                 ) : null}
                 Draft {discount.label}
               </Button>
@@ -335,7 +350,7 @@ export function ActionCenter({
                 }
                 className="justify-start text-[11px]"
               >
-                {busy === "draft_supplier_deferral_email" ? <Loader2 className="size-4 animate-spin" /> : null}
+                {busy === "draft_supplier_deferral_email" ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
                 Draft {deferral.label}
               </Button>
             ) : null}
@@ -359,9 +374,9 @@ export function ActionCenter({
                 className="h-auto justify-start py-1.5 text-left text-[11px] whitespace-normal"
               >
                 {busy === "draft_customer_discount_offer" ? (
-                  <Loader2 className="size-4 shrink-0 animate-spin" />
+                  <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden />
                 ) : (
-                  <FileWarning className="size-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                  <FileWarning className="size-4 shrink-0 text-amber-700 dark:text-amber-400" aria-hidden />
                 )}
                 <span>
                   Draft the 3-way reconciliation request to {blocked.customer_name}
@@ -378,7 +393,7 @@ export function ActionCenter({
               onClick={() => stageDraft("draft_recovery_plan_summary", "CFO recovery briefing", {})}
               className="justify-start text-[11px]"
             >
-              {busy === "draft_recovery_plan_summary" ? <Loader2 className="size-4 animate-spin" /> : null}
+              {busy === "draft_recovery_plan_summary" ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
               Draft the CFO recovery briefing
             </Button>
 
@@ -424,10 +439,8 @@ export function ActionCenter({
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="email" className="flex flex-col gap-2 pt-1">
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Controller signatory · no distress language · {preview.portal.allowed_signatory_role}
-                </p>
-                <DraftBody output={preview.result.output} />
+                <DraftMeta output={preview.result.output} signatory={preview.portal.allowed_signatory_role} />
+                <DraftBody body={draftParts(preview.result.output).body} />
               </TabsContent>
               <TabsContent value="portal" className="flex flex-col gap-2 pt-1">
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -443,7 +456,17 @@ export function ActionCenter({
               </TabsContent>
             </Tabs>
           ) : (
-            <DraftBody output={preview?.result.output} />
+            preview ? (
+              (() => {
+                const parts = draftParts(preview.result.output);
+                return (
+                  <div className="flex flex-col gap-2">
+                    {parts.draftedFor ? <DraftMeta output={preview.result.output} /> : null}
+                    <DraftBody body={parts.body} />
+                  </div>
+                );
+              })()
+            ) : null
           )}
         </DialogContent>
       </Dialog>
@@ -451,25 +474,60 @@ export function ActionCenter({
   );
 }
 
-function DraftBody({ output }: { output: unknown }) {
+/**
+ * Split a tool output into the properties the preview shows separately: the
+ * drafted-for panel (recipient + subject), and the message body. A narrative
+ * briefing has no recipient and stays one body. Denied payloads keep their
+ * raw JSON — a refusal is evidence, not email.
+ */
+function draftParts(output: unknown): { to: string | null; subject: string | null; draftedFor: boolean; body: string } {
+  if (output && typeof output === "object") {
+    const payload = output as {
+      draft?: { to?: string; subject?: string; body?: string };
+      narrative?: string;
+    };
+    if (payload.draft) {
+      return {
+        to: payload.draft.to ?? null,
+        subject: payload.draft.subject ?? null,
+        draftedFor: true,
+        body: payload.draft.body ?? "",
+      };
+    }
+    if (payload.narrative) {
+      return { to: null, subject: null, draftedFor: false, body: payload.narrative.replace(/\*\*/g, "") };
+    }
+  }
+  return { to: null, subject: null, draftedFor: false, body: output ? JSON.stringify(output, null, 2) : "" };
+}
+
+function DraftMeta({ output, signatory }: { output: unknown; signatory?: string }) {
+  const parts = draftParts(output);
+  if (!parts.draftedFor) return null;
   return (
-    <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
-      {renderDraft(output)}
-    </pre>
+    <div className="rounded-md border border-slate-200 px-3 py-2 text-[11px] dark:border-slate-800">
+      <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+        <p>
+          <span className="font-medium">Recipient: </span>
+          <span className="font-mono">{parts.to}</span>
+        </p>
+        <p className="text-slate-500 dark:text-slate-400">
+          <span className="font-medium">Subject: </span>
+          {parts.subject}
+        </p>
+      </div>
+      <p className="mt-1 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+        Staged for review — sending is a separate Tier 2 approval, and nothing has been sent.
+        {signatory ? ` Signed by the ${signatory.toLowerCase()} · no distress language.` : ""}
+      </p>
+    </div>
   );
 }
 
-function renderDraft(output: unknown): string {
-  if (!output || typeof output !== "object") return String(output ?? "");
-  const payload = output as {
-    draft?: { to?: string; subject?: string; body?: string };
-    narrative?: string;
-    denied?: boolean;
-    reason?: string;
-  };
-  if (payload.draft) {
-    return [`To: ${payload.draft.to}`, `Subject: ${payload.draft.subject}`, "", payload.draft.body].join("\n");
-  }
-  if (payload.narrative) return payload.narrative.replace(/\*\*/g, "");
-  return JSON.stringify(output, null, 2);
+function DraftBody({ body }: { body: string }) {
+  return (
+    <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
+      {body}
+    </pre>
+  );
 }

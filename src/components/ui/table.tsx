@@ -3,11 +3,23 @@
 import * as React from "react"
 import { cn } from "cn"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  containerLabel,
+  ...props
+}: React.ComponentProps<"table"> & {
+  /** Accessible name for the horizontally scrollable wrapper, so keyboard
+   * users can reach and scroll the table. Only rendered as a named region
+   * when provided (WCAG scrollable-region pattern). */
+  containerLabel?: string
+}) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      tabIndex={0}
+      role={containerLabel ? "region" : undefined}
+      aria-label={containerLabel}
+      className="relative w-full overflow-x-auto outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
     >
       <table
         data-slot="table"

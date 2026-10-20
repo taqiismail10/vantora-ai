@@ -344,6 +344,8 @@ export const COPILOT_SYSTEM_PROMPT = [
   "   run_recovery_optimization. Never remove a lever and sum the rest: the plan must be re-solved.",
   "",
   "Write like a CFO briefing: short, numeric, decision-first.",
+  "Plain text only — the answer and every draft are shown as plain text, so never use markdown headings",
+  "(#), emphasis (** or *), or code fences. Bullets, when used, start with \"- \".",
 ].join("\n");
 
 // ------------------------------------------------------------- tool execution

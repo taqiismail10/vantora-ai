@@ -16,13 +16,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Ban,
-  CheckCircle2,
+  ChevronRight,
+  CircleCheck,
   CircleDashed,
   CircleDot,
   Clock,
   FlaskConical,
   KeyRound,
-  Loader2,
+  LoaderCircle,
   Lock,
   Send,
   ShieldCheck,
@@ -44,14 +45,14 @@ import { confirmationMatches, confirmationTarget } from "./currency";
 import { DecisionBadge, SectionHeading, TierBadge, useMoney } from "./primitives";
 
 const STATUS: Record<ActionStatus, { label: string; icon: React.ReactNode; className: string }> = {
-  PROPOSED: { label: "Proposed", icon: <CircleDashed className="size-3" />, className: "text-slate-700 dark:text-slate-300" },
-  APPROVED: { label: "Approved — not sent", icon: <KeyRound className="size-3" />, className: "text-sky-800 dark:text-sky-300" },
-  SUBMITTED: { label: "Submitted", icon: <Send className="size-3" />, className: "text-sky-800 dark:text-sky-300" },
-  AWAITING_COUNTERPARTY: { label: "Awaiting counterparty", icon: <Clock className="size-3" />, className: "text-amber-800 dark:text-amber-300" },
-  ACCEPTED: { label: "Accepted — not yet received", icon: <CircleDot className="size-3" />, className: "text-emerald-800 dark:text-emerald-300" },
-  SETTLED: { label: "Settled — cash received", icon: <Wallet className="size-3" />, className: "text-emerald-800 dark:text-emerald-300" },
-  DECLINED: { label: "Declined", icon: <Ban className="size-3" />, className: "text-rose-800 dark:text-rose-300" },
-  FAILED: { label: "Failed", icon: <TriangleAlert className="size-3" />, className: "text-rose-800 dark:text-rose-300" },
+  PROPOSED: { label: "Proposed", icon: <CircleDashed className="size-3" aria-hidden />, className: "text-slate-700 dark:text-slate-300" },
+  APPROVED: { label: "Approved — not sent", icon: <KeyRound className="size-3" aria-hidden />, className: "text-sky-800 dark:text-sky-300" },
+  SUBMITTED: { label: "Submitted", icon: <Send className="size-3" aria-hidden />, className: "text-sky-800 dark:text-sky-300" },
+  AWAITING_COUNTERPARTY: { label: "Awaiting counterparty", icon: <Clock className="size-3" aria-hidden />, className: "text-amber-800 dark:text-amber-300" },
+  ACCEPTED: { label: "Accepted — not yet received", icon: <CircleDot className="size-3" aria-hidden />, className: "text-emerald-800 dark:text-emerald-300" },
+  SETTLED: { label: "Settled — cash received", icon: <Wallet className="size-3" aria-hidden />, className: "text-emerald-800 dark:text-emerald-300" },
+  DECLINED: { label: "Declined", icon: <Ban className="size-3" aria-hidden />, className: "text-rose-800 dark:text-rose-300" },
+  FAILED: { label: "Failed", icon: <TriangleAlert className="size-3" aria-hidden />, className: "text-rose-800 dark:text-rose-300" },
 };
 
 export function StatusChip({ status, kind }: { status: ActionStatus; kind?: string }) {
@@ -65,6 +66,108 @@ export function StatusChip({ status, kind }: { status: ActionStatus; kind?: stri
       {meta.icon}
       {meta.label}
     </Badge>
+  );
+}
+
+/**
+ * The stages each kind of action can walk through, taken from the same
+ * machine the server enforces (`NEXT_STATUSES`): a deferral ends at ACCEPTED —
+ * there is no cash to settle — while a discount offer or a bridge draw can
+ * continue to SETTLED. Declined and failed are terminal stops off this ladder
+ * and are rendered as such, never as progress.
+ */
+const LIFECYCLE_STAGES: Record<string, ActionStatus[]> = {
+  ar_early_discount: ["PROPOSED", "APPROVED", "SUBMITTED", "AWAITING_COUNTERPARTY", "ACCEPTED", "SETTLED"],
+  ap_deferral: ["PROPOSED", "APPROVED", "SUBMITTED", "AWAITING_COUNTERPARTY", "ACCEPTED"],
+  bridge_draw: ["PROPOSED", "APPROVED", "SUBMITTED", "AWAITING_COUNTERPARTY", "ACCEPTED", "SETTLED"],
+};
+
+const STAGE_LABEL: Partial<Record<ActionStatus, string>> = {
+  PROPOSED: "Proposed",
+  APPROVED: "Approved",
+  SUBMITTED: "Submitted",
+  AWAITING_COUNTERPARTY: "Counterparty",
+  ACCEPTED: "Accepted",
+  SETTLED: "Settled",
+};
+
+const STAGE_DOT: Partial<Record<ActionStatus, string>> = {
+  APPROVED: "bg-sky-600",
+  SUBMITTED: "bg-sky-600",
+  AWAITING_COUNTERPARTY: "bg-amber-500",
+  ACCEPTED: "bg-emerald-600",
+  SETTLED: "bg-emerald-600",
+};
+
+/** How far along its ladder this action demonstrably is. */
+function reachedStageIndex(action: ActionView, chain: ActionStatus[]): number {
+  const at = chain.indexOf(action.status);
+  if (at >= 0) return at;
+  // Terminal failure states sit off the ladder: the furthest recorded event
+  // says which stage the failure happened after.
+  let reached = 0;
+  for (const event of action.events) {
+    const index = chain.indexOf(event.status);
+    if (index >= 0) reached = Math.max(reached, index);
+  }
+  return reached;
+}
+
+export function LifecycleChain({ action }: { action: ActionView }) {
+  const chain = LIFECYCLE_STAGES[action.kind];
+  if (!chain) return null;
+  const dead = action.status === "DECLINED" || action.status === "FAILED";
+  const reached = reachedStageIndex(action, chain);
+  const deadMeta = dead ? STATUS[action.status] : null;
+
+  return (
+    <ol
+      aria-label={
+        dead
+          ? `Lifecycle: ${deadMeta!.label} after ${STAGE_LABEL[chain[Math.min(reached, chain.length - 1)]] ?? "proposed"}`
+          : `Lifecycle stage ${reached + 1} of ${chain.length}: ${STAGE_LABEL[action.status] ?? ""}`
+      }
+      className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] leading-none"
+    >
+      {chain.map((stage, index) => {
+        const done = index < reached;
+        const current = !dead && index === reached;
+        const future = !dead && index > reached;
+        const label = STAGE_LABEL[stage] ?? stage.toLowerCase();
+        return (
+          <li key={stage} className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "size-2 shrink-0 rounded-full",
+                done && "bg-slate-300 dark:bg-slate-600",
+                current && STAGE_DOT[stage],
+                future && "border border-dashed border-slate-300 dark:border-slate-700",
+              )}
+              aria-hidden
+            />
+            <span
+              className={cn(
+                "font-mono",
+                done && "text-slate-500 dark:text-slate-400",
+                current && cn("font-semibold", STATUS[stage].className),
+                future && "text-slate-400 dark:text-slate-600",
+              )}
+            >
+              {label}
+            </span>
+            {index < chain.length - 1 || dead ? (
+              <ChevronRight className="size-2.5 text-slate-300 dark:text-slate-700" aria-hidden />
+            ) : null}
+          </li>
+        );
+      })}
+      {dead && deadMeta ? (
+        <li className="flex items-center gap-1 font-mono font-semibold text-rose-800 dark:text-rose-300">
+          <span className="scale-75">{deadMeta.icon}</span>
+          {deadMeta.label}
+        </li>
+      ) : null}
+    </ol>
   );
 }
 
@@ -258,6 +361,9 @@ export function ExecutionQueue({
         {ex.bundle && proposed.length > 1 ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-2.5 dark:border-slate-800">
             <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-amber-800 dark:text-amber-300">
+                Review needed — none of this sends without approval
+              </p>
               <p className="text-xs font-medium">Submit the remaining plan as one decision</p>
               <p className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
                 {ex.bundle.action_keys.length} actions · {money2(ex.bundle.cash_cost_cents / 100)} in cash
@@ -290,11 +396,18 @@ export function ExecutionQueue({
               </div>
               <div className="flex flex-col items-end gap-1">
                 <StatusChip status={action.status} kind={action.kind} />
+                {action.status === "APPROVED" && action.approval_expires_at ? (
+                  <span className="font-mono text-[10px] tabular-nums text-amber-800 dark:text-amber-300">
+                    approval expires {new Date(action.approval_expires_at).toLocaleTimeString()}
+                  </span>
+                ) : null}
                 {action.delegated_to_agent ? (
                   <Badge variant="outline" className="font-mono text-[10px]">delegated to copilot</Badge>
                 ) : null}
               </div>
             </div>
+
+            <LifecycleChain action={action} />
 
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {action.status === "PROPOSED" || action.status === "APPROVED" ? (
@@ -322,7 +435,7 @@ export function ExecutionQueue({
                       onClick={() => simulate(action, next)}
                       className="h-6 px-2 text-[10px]"
                     >
-                      {busy === `sim:${action.action_key}` ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
+                      {busy === `sim:${action.action_key}` ? <LoaderCircle className="size-3 animate-spin" aria-hidden /> : null}
                       {SIMULATE_LABEL[next] ?? next.toLowerCase()}
                     </Button>
                   ))}
@@ -355,16 +468,44 @@ export function ExecutionQueue({
           </p>
         ) : null}
 
-        {results.map((result, index) => (
-          <div key={`${result.seq}-${index}`} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 text-[11px] dark:border-slate-800 dark:bg-slate-900/40">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <TierBadge tier={result.tier} />
-              <DecisionBadge decision={result.decision} />
-              <Badge variant="outline" className="font-mono text-[10px]">audit seq #{result.seq}</Badge>
+        {results.map((result, index) => {
+          // A successful execution already happened by the time this lands:
+          // say so plainly, and say what it is not (not accepted, not cash).
+          const submissionReceived = result.decision === "ALLOWED" && result.ok;
+          return (
+            <div
+              key={`${result.seq}-${index}`}
+              className={cn(
+                "rounded-lg border p-2.5 text-[11px]",
+                submissionReceived
+                  ? "border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/30"
+                  : "border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40",
+              )}
+            >
+              <div className="flex flex-wrap items-center gap-1.5">
+                {submissionReceived ? (
+                  <Send className="size-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden />
+                ) : null}
+                <strong className="font-medium">
+                  {submissionReceived ? "Submission received — tracked in the queue above" : "Gate decision"}
+                </strong>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <TierBadge tier={result.tier} />
+                <DecisionBadge decision={result.decision} />
+                <Badge variant="outline" className="font-mono text-[10px]">audit seq #{result.seq}</Badge>
+              </div>
+              <p className="mt-1 text-slate-600 dark:text-slate-400">{result.reason}</p>
+              {submissionReceived ? (
+                <p className="mt-1 text-slate-500 dark:text-slate-400">
+                  This is a submission, not an acceptance or a payment: in the sandbox the counterparty still
+                  responds, and nothing is cash until an action reaches &ldquo;Settled — cash received&rdquo;. A
+                  deferred bill instead moves its due date when accepted. Nothing sends anywhere real.
+                </p>
+              ) : null}
             </div>
-            <p className="mt-1 text-slate-600 dark:text-slate-400">{result.reason}</p>
-          </div>
-        ))}
+          );
+        })}
 
         <p className="flex items-start gap-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-slate-500" aria-hidden />
@@ -467,6 +608,9 @@ function ApprovalDialog({
       </DialogHeader>
 
       <div className="rounded-md border border-slate-200 px-3 py-1 dark:border-slate-800">
+        <p className="pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500 dark:text-slate-400">
+          What you are approving
+        </p>
         {actions.map((action) => (
           <Row key={action.action_key} label={action.counterparty} value={action.effect} />
         ))}
@@ -520,7 +664,7 @@ function ApprovalDialog({
           Cancel
         </Button>
         <Button size="sm" disabled={!matches || busy} onClick={() => onConfirm(typed, delegate)} className="text-[11px]">
-          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : delegate ? <CheckCircle2 className="size-4" aria-hidden /> : <Lock className="size-4" aria-hidden />}
+          {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : delegate ? <CircleCheck className="size-4" aria-hidden /> : <Lock className="size-4" aria-hidden />}
           {delegate ? "Approve & delegate" : `Approve & submit — ${money2(expectedCents / 100)}`}
         </Button>
       </DialogFooter>

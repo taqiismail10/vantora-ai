@@ -56,7 +56,7 @@ export async function askCopilot(options: {
   const config = aiConfig();
 
   const deterministic = (reason: FallbackReason, detail: string | null): CopilotTurn => {
-    const answer = answerDeterministically(question, ctx);
+    const answer = plainCopilotText(answerDeterministically(question, ctx));
     return {
       answer,
       source: "deterministic",
@@ -92,7 +92,12 @@ export async function askCopilot(options: {
     return deterministic(run.reason, run.detail);
   }
 
-  const integrity = verifyNumericalIntegrity(run.text, bundle);
+  // The answer is fought over here once: it is stripped of markdown markers
+  // before the integrity check, so what is verified is exactly what is shown.
+  // The withheld raw text below still carries the markers — it is evidence,
+  // never displayed.
+  const text = plainCopilotText(run.text);
+  const integrity = verifyNumericalIntegrity(text, bundle);
   if (!integrity.ok) {
     // The chain keeps only a digest of the withheld text; the server log keeps
     // enough to diagnose it: each rejected figure in its sentence, and the tools
@@ -122,7 +127,7 @@ export async function askCopilot(options: {
   }
 
   return {
-    answer: run.text,
+    answer: text,
     source: run.provider,
     model: run.model,
     provider: run.provider,
@@ -141,4 +146,29 @@ export function figureContext(text: string, value: number | undefined, radius = 
   const grouped = Number(int).toLocaleString("en-US") + (frac ? `.${frac}` : "");
   const at = [grouped, plain].map((form) => text.indexOf(form)).find((i) => i >= 0) ?? 0;
   return text.slice(Math.max(0, at - radius), at + radius).replace(/\s+/g, " ");
+}
+
+/**
+ * Every surface that shows a copilot answer renders plain text — the draft
+ * bodies are emails sent by people — but models still decorate like a chat
+ * app: "### Heading", "**bold**", fenced code blocks. Rendered literally,
+ * those markers are junk in a CFO briefing and an outbound email.
+ *
+ * Markdown syntax is therefore removed before `verifyNumericalIntegrity` and
+ * display, so the verified text and the displayed text are the same string.
+ * Only wrapping markers are removed — heading hashes, emphasis stars, code
+ * ticks — never wording, figures, line breaks or underscores (tool names like
+ * `run_recovery_optimization` contain real underscores and must survive).
+ * A leading "#12" reference is safe: the pattern needs the hash run followed
+ * by whitespace, so "#12 " does not match. Idempotent, and a no-op on the
+ * already-plain deterministic answers.
+ */
+export function plainCopilotText(text: string): string {
+  return text
+    .replace(/^#{1,6}(?:\s+|$)/gm, "") // "### Summary" -> "Summary"; stray fence-like "#" line dropped
+    .replace(/^`{3,}[\w-]*[ \t]*\n?/gm, "") // code-fence lines (```…```) removed, block content kept
+    .replace(/\*{2,}([^*\n]+?)\*{2,}/g, "$1") // "**Plan cost**" -> "Plan cost"
+    .replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g, "$1$2") // "*see below*" -> "see below"; a*2 stays
+    .replace(/^([ \t]*)\*(?=\s)/gm, "$1-") // "* item" -> "- item", keeping the indent
+    .replace(/`([^`\n]+?)`/g, "$1"); // `run_recovery_optimization` -> run_recovery_optimization
 }

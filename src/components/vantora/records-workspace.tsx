@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, LoaderCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -82,7 +82,7 @@ export function RecordsWorkspace() {
     return (
       <Shell>
         <p role="status" className="text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="mr-2 inline size-3.5 animate-spin" aria-hidden />
+          <LoaderCircle className="mr-2 inline size-3.5 animate-spin" aria-hidden />
           Loading your records…
         </p>
       </Shell>

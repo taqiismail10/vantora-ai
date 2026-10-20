@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 
 import { ActionCenter } from "./action-center";
 import { AuditLedger } from "./audit-ledger";
+import { MonitoringPanel } from "./monitoring-panel";
+import { MonitoringUnavailable } from "./monitoring-unavailable";
 import { fetchDashboardState, runRedTeamDrill, scenarioOf, SessionExpiredError } from "./client-api";
 import { CoveragePanel } from "./coverage-panel";
 import { LiquidityRadar } from "./liquidity-radar";
@@ -150,6 +152,9 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
               <TabsTrigger value="ledger" className="shrink-0">
                 Security &amp; ledger
               </TabsTrigger>
+              <TabsTrigger value="monitoring" className="shrink-0">
+                AI monitoring
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="liquidity" className="pt-4">
@@ -174,6 +179,13 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
             </TabsContent>
             <TabsContent value="ledger" className="pt-4">
               <AuditLedger data={data} />
+            </TabsContent>
+            <TabsContent value="monitoring" className="pt-4">
+              {data.company.is_demo ? (
+                <MonitoringUnavailable />
+              ) : (
+                <MonitoringPanel companyId={data.company.id} />
+              )}
             </TabsContent>
           </Tabs>
         </div>
@@ -208,9 +220,9 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               {redTeam?.summary.passed ? (
-                <ShieldCheck className="size-4 text-emerald-700" />
+                <ShieldCheck className="size-4 text-emerald-700" aria-hidden />
               ) : (
-                <ShieldAlert className="size-4 text-rose-600" />
+                <ShieldAlert className="size-4 text-rose-600" aria-hidden />
               )}
               Red-team security drill
             </DialogTitle>

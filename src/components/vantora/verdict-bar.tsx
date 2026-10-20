@@ -9,7 +9,7 @@
  * and never "this cell is important".
  */
 
-import { ArrowRight, Ban, CalendarClock, CheckCircle2, TriangleAlert } from "lucide-react";
+import { ArrowRight, Ban, CalendarClock, CircleCheck, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { DashboardState } from "@/lib/dashboard-state";
@@ -59,7 +59,7 @@ export function VerdictBar({
         aria-label="Executive verdict"
         className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-4 py-3 dark:border-emerald-900 dark:bg-emerald-950/30"
       >
-        <CheckCircle2 className="size-5 shrink-0 text-emerald-700 dark:text-emerald-400" />
+        <CircleCheck className="size-5 shrink-0 text-emerald-700 dark:text-emerald-400" aria-hidden />
         <span className="text-xl font-semibold tabular-nums tracking-tight text-emerald-700 dark:text-emerald-300">
           {money(0)} shortfall across {forecast.horizon_days} days
         </span>
@@ -82,7 +82,7 @@ export function VerdictBar({
         className="rounded-md border border-slate-900 bg-slate-900 px-4 py-3 text-slate-100 dark:border-slate-100/20"
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <Ban className="size-5 shrink-0 text-rose-400" />
+          <Ban className="size-5 shrink-0 text-rose-400" aria-hidden />
           <span className="text-sm font-semibold uppercase tracking-[0.12em] text-rose-400">
             Infeasible via short-term levers
           </span>
@@ -297,7 +297,7 @@ export function ProgressRail({ data, onNavigate }: { data: DashboardState; onNav
 export function VerdictFallback({ reason }: { reason: string }) {
   return (
     <section className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
-      <TriangleAlert className="size-4 shrink-0" />
+      <TriangleAlert className="size-4 shrink-0" aria-hidden />
       {reason}
     </section>
   );

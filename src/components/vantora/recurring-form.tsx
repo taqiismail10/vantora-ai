@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -155,12 +155,15 @@ function OccurrencePreview({
   currency,
   readOnly,
   onChanged,
+  id,
 }: {
   recurring: RecurringRow;
   payables: PayableRow[];
   currency: string;
   readOnly?: boolean;
   onChanged: () => void;
+  /** Stable id on the panel so the disclosure button can point at it (aria-controls). */
+  id?: string;
 }) {
   const [occurrences, setOccurrences] = useState<OccurrenceRow[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -199,10 +202,13 @@ function OccurrencePreview({
   const unresolvedCount = occurrences?.filter((o) => !o.resolved).length ?? 0;
 
   return (
-    <div className="col-span-full flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
+    <div
+      id={id}
+      className="col-span-full flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void load()}>
-          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+          {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
           Preview upcoming occurrences
         </Button>
         {occurrences && unresolvedCount > 0 ? (
@@ -413,7 +419,7 @@ function LinkOccurrenceForm({
       ) : null}
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" disabled={busy || !payableId} onClick={() => void link()}>
-          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+          {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
           Link this bill
         </Button>
         <Button type="button" variant="ghost" size="sm" className="h-7 text-[11px]" disabled={busy} onClick={onCancel}>
@@ -422,6 +428,10 @@ function LinkOccurrenceForm({
       </div>
     </div>
   );
+}
+
+function occurrencesPanelId(recurringId: string) {
+  return `recurring-occurrences-${recurringId}`;
 }
 
 export function RecurringList({
@@ -460,7 +470,14 @@ export function RecurringList({
             </Badge>
           ) : null}
           <span className="font-medium tabular-nums">{formatMinor(row.amountCents, currency)}</span>
-          <Button type="button" variant="outline" size="sm" onClick={() => setExpanded((cur) => (cur === row.id ? null : row.id))}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setExpanded((cur) => (cur === row.id ? null : row.id))}
+            aria-expanded={expanded === row.id}
+            aria-controls={expanded === row.id ? occurrencesPanelId(row.id) : undefined}
+          >
             {expanded === row.id ? "Close" : "Occurrences"}
           </Button>
           {readOnly ? null : row.status === "active" ? (
@@ -496,7 +513,7 @@ export function RecurringList({
             </Button>
           )}
           {expanded === row.id
-            ? <OccurrencePreview recurring={row} payables={payables ?? []} currency={currency} readOnly={readOnly} onChanged={onChanged} />
+            ? <OccurrencePreview recurring={row} payables={payables ?? []} currency={currency} readOnly={readOnly} onChanged={onChanged} id={occurrencesPanelId(row.id)} />
             : null}
         </li>
       ))}

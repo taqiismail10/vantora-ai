@@ -14,7 +14,7 @@
  */
 
 import { useState } from "react";
-import { Beaker, Loader2, ShieldAlert, ShieldCheck, Sigma } from "lucide-react";
+import { Beaker, LoaderCircle, ShieldAlert, ShieldCheck, Sigma } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,7 +123,7 @@ function Tester({
 
       <div className="flex items-center gap-2">
         <Button size="sm" disabled={busy || !value.trim()} onClick={onRun} className="text-[11px]">
-          {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+          {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
           {runLabel}
         </Button>
         {value.trim() ? (
@@ -171,7 +171,7 @@ export function RedTeamPlayground() {
     <Card className="border-slate-200 dark:border-slate-800">
       <CardHeader>
         <div className="flex items-center gap-2">
-          <Beaker className="size-4 text-slate-500 dark:text-slate-400" />
+          <Beaker className="size-4 text-slate-500 dark:text-slate-400" aria-hidden />
           <SectionHeading title="Live red-team playground — try to break the gate" hint="read-only" />
         </div>
         <CardDescription className="text-xs">
@@ -190,7 +190,7 @@ export function RedTeamPlayground() {
 
         <div className="grid gap-3 xl:grid-cols-2">
           <Tester
-            icon={<ShieldAlert className="size-4" />}
+            icon={<ShieldAlert className="size-4" aria-hidden />}
             title="A · Invoice memo injection scanner"
             hint="6 detector rules"
             description={
@@ -225,9 +225,9 @@ export function RedTeamPlayground() {
                   )}
                 >
                   {memoResult.quarantined ? (
-                    <ShieldAlert className="size-3.5" />
+                    <ShieldAlert className="size-3.5" aria-hidden />
                   ) : (
-                    <ShieldCheck className="size-3.5" />
+                    <ShieldCheck className="size-3.5" aria-hidden />
                   )}
                   {memoResult.quarantined
                     ? `QUARANTINED — blocked at ingestion (${memoResult.tier})`
@@ -268,7 +268,7 @@ export function RedTeamPlayground() {
           </Tester>
 
           <Tester
-            icon={<Sigma className="size-4" />}
+            icon={<Sigma className="size-4" aria-hidden />}
             title="B · Numerical integrity verifier"
             hint="anti-hallucination"
             description={
@@ -303,9 +303,9 @@ export function RedTeamPlayground() {
                   )}
                 >
                   {numberResult.ok ? (
-                    <ShieldCheck className="size-3.5" />
+                    <ShieldCheck className="size-3.5" aria-hidden />
                   ) : (
-                    <ShieldAlert className="size-3.5" />
+                    <ShieldAlert className="size-3.5" aria-hidden />
                   )}
                   {numberResult.ok
                     ? `ATTESTED — every figure traced to the solver`

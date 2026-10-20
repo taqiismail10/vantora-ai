@@ -92,6 +92,8 @@ import {
   updatePayable,
 } from "@/lib/server/records";
 
+import { queueFinancialChange } from "@/lib/server/monitoring";
+
 function fail(error: unknown) {
   if (error instanceof AccessError) return NextResponse.json({ error: error.message }, { status: error.status });
   console.error("[company]", error);
@@ -252,8 +254,11 @@ export async function POST(request: Request) {
         deleteCounterparty(company.id, str(payload.id));
         return NextResponse.json({ ok: true });
 
-      case "add_receivable":
-        return NextResponse.json({ ok: true, receivable: addReceivable(company.id, currency, payload as never) });
+      case "add_receivable": {
+        const rec = addReceivable(company.id, currency, payload as never);
+        queueFinancialChange(company.id, "financial_change", { kind: "add_receivable" });
+        return NextResponse.json({ ok: true, receivable: rec });
+      }
 
       case "set_receivable_status":
         setReceivableStatus(company.id, str(payload.id), str(payload.status) as "open" | "disputed" | "cancelled");
@@ -281,8 +286,11 @@ export async function POST(request: Request) {
         });
       }
 
-      case "add_payable":
-        return NextResponse.json({ ok: true, payable: addPayable(company.id, currency, payload as never) });
+      case "add_payable": {
+        const payable = addPayable(company.id, currency, payload as never);
+        queueFinancialChange(company.id, "financial_change", { kind: "add_payable" });
+        return NextResponse.json({ ok: true, payable });
+      }
 
       case "update_payable":
         return NextResponse.json({
@@ -384,6 +392,7 @@ export async function POST(request: Request) {
 
       case "record_payment": {
         const result = recordPayment(company.id, currency, payload as never, actor.email);
+        queueFinancialChange(company.id, "financial_change", { kind: "record_payment" });
         return NextResponse.json({ ok: true, ...result, balances: [...obligationBalances(company.id).values()] });
       }
 

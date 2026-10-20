@@ -47,7 +47,7 @@ export function AttestationPopover({
           />
         }
       >
-        {integrity.ok ? <BadgeCheck className="size-3" /> : <ShieldX className="size-3" />}
+        {integrity.ok ? <BadgeCheck className="size-3" aria-hidden /> : <ShieldX className="size-3" aria-hidden />}
         {integrity.ok
           ? `✓ ${dollars.length} figures · ${rates.length} rates — traced to solver`
           : `${integrity.violations.length} figures BLOCKED`}

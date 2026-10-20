@@ -13,9 +13,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, LoaderCircle } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +47,7 @@ const STEPS: { id: Step; label: string; blurb: string }[] = [
 ];
 
 const INPUT =
-  "h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-700 dark:bg-slate-950";
+  "h-9 w-full rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white outline-none placeholder:text-white/20 focus-visible:border-[#cdf632]/50 focus-visible:ring-2 focus-visible:ring-[#cdf632]/20";
 
 export function Onboarding() {
   const [workspace, setWorkspace] = useState<CompanyWorkspace | null>(null);
@@ -92,7 +91,7 @@ export function Onboarding() {
   if (error) {
     return (
       <Shell>
-        <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+        <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
           {error}
         </p>
       </Shell>
@@ -102,8 +101,8 @@ export function Onboarding() {
   if (!workspace) {
     return (
       <Shell>
-        <p role="status" className="text-xs text-slate-500 dark:text-slate-400">
-          <Loader2 className="mr-2 inline size-3.5 animate-spin" aria-hidden />
+        <p role="status" className="text-xs text-white/40">
+          <LoaderCircle className="mr-2 inline size-3.5 animate-spin" aria-hidden />
           Loading your workspace…
         </p>
       </Shell>
@@ -149,17 +148,20 @@ export function Onboarding() {
     <Shell>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+          <h1 className="text-lg font-semibold tracking-tight text-white">
             Set up {company.name}
           </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className="text-xs text-white/40">
             You can stop at any point and pick this up later. {company.currency} · required fields are marked
-            <span className="mx-1 text-rose-600 dark:text-rose-400">*</span>
+            <span className="mx-1 text-rose-400">*</span>
           </p>
         </div>
-        <Badge variant="outline" className="font-mono text-[10px]">
+        {/* "Step N of 4" from the Figma company-setup frames: plain green
+            text rather than the boxed chip. Style only — it keeps its current
+            place in the header row. */}
+        <span className="text-xs font-medium text-[#cdf632]">
           Step {index + 1} of {STEPS.length}
-        </Badge>
+        </span>
       </div>
 
       <ol className="flex flex-wrap gap-1.5" aria-label="Onboarding steps">
@@ -176,8 +178,8 @@ export function Onboarding() {
                 className={cn(
                   "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-40",
                   entry.id === active
-                    ? "border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"
-                    : "border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800",
+                    ? "border-[#cdf632]/40 bg-[#cdf632]/10 text-[#cdf632]"
+                    : "border-white/10 text-white/40 hover:bg-white/5",
                 )}
               >
                 {done ? <Check className="size-3" aria-hidden /> : null}
@@ -188,7 +190,7 @@ export function Onboarding() {
         })}
       </ol>
 
-      <p className="text-xs text-slate-500 dark:text-slate-400">{STEPS[index].blurb}</p>
+      <p className="text-xs text-white/40">{STEPS[index].blurb}</p>
 
       {active === "profile" ? <ProfileStep workspace={workspace} onSaved={load} /> : null}
       {active === "accounts" ? <AccountsStep workspace={workspace} onSaved={load} /> : null}
@@ -202,7 +204,7 @@ export function Onboarding() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="flex-1 bg-slate-50 dark:bg-slate-950">
+    <main className="dark flex-1 bg-[#0a0a0a]">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-8">{children}</div>
     </main>
   );
@@ -235,9 +237,9 @@ function StepNav({
   };
 
   return (
-    <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+    <div className="flex flex-col gap-2 border-t border-white/10 pt-4">
       {error ? (
-        <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <p role="alert" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-300">
           {error}
         </p>
       ) : null}
@@ -252,7 +254,7 @@ function StepNav({
         </Button>
         {last ? (
           <Button onClick={() => void finish()} disabled={busy || !workspace.active}>
-            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
             Finish and see my forecast
           </Button>
         ) : (
@@ -269,7 +271,7 @@ function StepNav({
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-100">{title}</h2>
+      <h2 className="text-sm font-semibold tracking-tight text-white">{title}</h2>
       {children}
     </section>
   );
@@ -300,8 +302,8 @@ function CreateCompany({ onCreated }: { onCreated: (newCompanyId: string) => Pro
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">Create your company</h1>
-        <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+        <h1 className="text-lg font-semibold tracking-tight text-white">Create your company</h1>
+        <p className="mt-1 text-xs leading-relaxed text-white/40">
           This is your own workspace. It starts empty — no demonstration data is copied into it, and nobody else can
           see it.
         </p>
@@ -329,12 +331,12 @@ function CreateCompany({ onCreated }: { onCreated: (newCompanyId: string) => Pro
         </Field>
       </div>
       {error ? (
-        <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+        <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
           {error}
         </p>
       ) : null}
       <Button type="submit" disabled={busy || !name}>
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
         Create company
       </Button>
     </form>
@@ -377,7 +379,7 @@ function ProfileStep({ workspace, onSaved }: { workspace: CompanyWorkspace; onSa
 
   return (
     <Card title="Company details">
-      <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 dark:border-slate-800 dark:bg-slate-950">
+      <div className="grid gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-4 sm:grid-cols-2">
         <Field label="Company name" required>
           {(id) => <input id={id} className={INPUT} value={name} onChange={(e) => setName(e.target.value)} />}
         </Field>
@@ -397,23 +399,23 @@ function ProfileStep({ workspace, onSaved }: { workspace: CompanyWorkspace; onSa
           {(id) => <input id={id} className={INPUT} value={locations} onChange={(e) => setLocations(e.target.value)} />}
         </Field>
         <div className="sm:col-span-2">
-          <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-            Base currency is <strong className="font-medium">{company.currency}</strong>. It is fixed once any amount
+          <p className="text-[11px] leading-relaxed text-white/35">
+            Base currency is <strong className="font-medium text-white/60">{company.currency}</strong>. It is fixed once any amount
             exists, because changing it would silently re-denominate every figure you have entered.
           </p>
         </div>
         {error ? (
-          <p role="alert" className="text-xs text-rose-700 sm:col-span-2 dark:text-rose-300">
+          <p role="alert" className="text-xs text-rose-400 sm:col-span-2">
             {error}
           </p>
         ) : null}
         <div className="flex items-center gap-3 sm:col-span-2">
           <Button type="button" onClick={() => void save()} disabled={busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
             Save details
           </Button>
           {saved && !busy ? (
-            <span role="status" className="text-xs text-emerald-700 dark:text-emerald-400">
+            <span role="status" className="text-xs text-[#cdf632]">
               Saved.
             </span>
           ) : null}
@@ -462,11 +464,11 @@ function RecordsStep({ workspace, onSaved }: { workspace: CompanyWorkspace; onSa
 
       <Card title="Payroll">
         {hasPayroll ? (
-          <p className="rounded-md border border-emerald-300 bg-emerald-50 p-2.5 text-xs text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          <p className="rounded-md border border-[#cdf632]/30 bg-[#cdf632]/10 p-2.5 text-xs text-[#cdf632]">
             A payroll obligation is recorded. It will never be deferred past its lock date.
           </p>
         ) : (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-300">
             <p>
               No payroll is recorded. Payroll is the obligation most likely to make a forecast wrong, so leaving it out
               will make your projection look healthier than it is.
@@ -524,7 +526,7 @@ function PolicyStep({ workspace, onSaved }: { workspace: CompanyWorkspace; onSav
 
   return (
     <Card title="Your safety line">
-      <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 dark:border-slate-800 dark:bg-slate-950">
+      <div className="grid gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-4 sm:grid-cols-2">
         <Field
           label="Minimum cash buffer"
           hint="The balance you never want to drop under. It is normal for this to be higher than the cash you hold today — that gap is exactly what the forecast is for."
@@ -538,17 +540,17 @@ function PolicyStep({ workspace, onSaved }: { workspace: CompanyWorkspace; onSav
           {(id) => <input id={id} inputMode="decimal" className={INPUT} value={revenue} onChange={(e) => setRevenue(e.target.value)} />}
         </Field>
         {error ? (
-          <p role="alert" className="text-xs text-rose-700 sm:col-span-2 dark:text-rose-300">
+          <p role="alert" className="text-xs text-rose-400 sm:col-span-2">
             {error}
           </p>
         ) : null}
         <div className="flex items-center gap-3 sm:col-span-2">
           <Button type="button" onClick={() => void save()} disabled={busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
             Save
           </Button>
           {saved && !busy ? (
-            <span role="status" className="text-xs text-emerald-700 dark:text-emerald-400">
+            <span role="status" className="text-xs text-[#cdf632]">
               Saved.
             </span>
           ) : null}

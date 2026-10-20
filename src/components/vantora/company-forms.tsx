@@ -13,7 +13,7 @@
  */
 
 import { useId, useState, type ReactNode } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { LoaderCircle, Plus, Trash } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,7 +148,7 @@ export function FormShell({
         </p>
       ) : null}
       <Button type="submit" disabled={busy} className="mt-3">
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Plus className="size-4" aria-hidden />}
+        {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Plus className="size-4" aria-hidden />}
         {submitLabel}
       </Button>
     </form>
@@ -165,7 +165,7 @@ function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void
       title={label}
       className="h-7 px-1.5 text-slate-500 hover:text-rose-600 dark:hover:text-rose-400"
     >
-      <Trash2 className="size-3.5" aria-hidden />
+      <Trash className="size-3.5" aria-hidden />
     </Button>
   );
 }
@@ -434,7 +434,7 @@ function CounterpartyTermsEditor({ party, onSaved }: { party: CounterpartyRow; o
         </p>
       ) : null}
       <Button type="submit" size="sm" disabled={busy} className="w-fit">
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
         Save supplier terms
       </Button>
     </form>
@@ -809,7 +809,7 @@ function PayableTermsEditor({ row, onSaved }: { row: PayableRow; onSaved: () => 
         </p>
       ) : null}
       <Button type="submit" size="sm" disabled={busy} className="w-fit">
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
         Save this bill&rsquo;s terms
       </Button>
     </form>
@@ -1076,7 +1076,7 @@ function FacilityTermsEditor({ facility, onSaved }: { facility: FacilityRow; onS
         </p>
       ) : null}
       <Button type="submit" size="sm" disabled={busy} className="w-fit">
-        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
         Save facility terms
       </Button>
     </form>

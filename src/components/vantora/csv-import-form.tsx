@@ -11,7 +11,7 @@
  */
 
 import { useRef, useState } from "react";
-import { Loader2, Upload } from "lucide-react";
+import { LoaderCircle, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -251,7 +251,7 @@ export function CsvImportForm({ currency, onImported }: { currency: string; onIm
               onClick={() => void runPreview()}
               className="w-fit"
             >
-              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />}
+              {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />}
               Preview import
             </Button>
             {!canPreview ? (
@@ -309,7 +309,7 @@ export function CsvImportForm({ currency, onImported }: { currency: string; onIm
               onClick={() => void confirmImport()}
               className="w-fit"
             >
-              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+              {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : null}
               {preview.counts.error > 0 ? "Fix errors before confirming" : `Confirm — add ${preview.counts.new} record${preview.counts.new === 1 ? "" : "s"}`}
             </Button>
           </div>

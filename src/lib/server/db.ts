@@ -353,6 +353,101 @@ INSERT OR IGNORE INTO company
 VALUES
   ('smart-jeans-mfg', 'Smart Jeans Ltd. (demonstration)', 'Apparel manufacturing', '', '',
    'UTC', 'USD', '[]', 'active', 1, 'done', 0, 'system');
+
+-- ---------------------------------------------------------------------------
+-- Autonomous monitoring: per-company AI connection and monitoring mandate.
+--
+-- ai_connection stores an OWNER's provider config with the API key AES-256-GCM
+-- encrypted. monitoring_mandate holds the standing instruction per company.
+-- monitoring_run records each agent execution. monitoring_event is the trigger
+-- queue — financial mutations and schedule ticks both write rows here; the
+-- worker claims and processes them.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_connection (
+  id                          TEXT PRIMARY KEY,
+  company_id                  TEXT NOT NULL,
+  provider                    TEXT NOT NULL CHECK (provider IN ('gemini', 'openrouter')),
+  model                       TEXT NOT NULL,
+  -- AES-256-GCM: hex(nonce):hex(ciphertext):hex(tag)
+  -- AAD = company_id || ':' || id  (binding prevents cross-company decryption)
+  encrypted_key               TEXT NOT NULL,
+  base_url                    TEXT,
+  provider_restrictions_json  TEXT,
+  created_by                  TEXT NOT NULL,
+  created_at                  INTEGER NOT NULL,
+  updated_at                  INTEGER NOT NULL,
+  tested_at                   INTEGER,
+  test_revision               INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ai_connection_company_once ON ai_connection (company_id);
+
+CREATE TABLE IF NOT EXISTS monitoring_mandate (
+  id                   TEXT PRIMARY KEY,
+  company_id           TEXT NOT NULL UNIQUE,
+  connection_id        TEXT NOT NULL,
+  connection_revision  INTEGER NOT NULL DEFAULT 1,
+  status               TEXT NOT NULL DEFAULT 'paused' CHECK (status IN ('active', 'paused', 'stopped')),
+  owner_user_id        TEXT NOT NULL,
+  check_interval_s     INTEGER NOT NULL DEFAULT 3600,
+  end_date             TEXT,
+  max_runs_total       INTEGER NOT NULL DEFAULT 100,
+  max_tokens_run       INTEGER NOT NULL DEFAULT 8000,
+  max_tool_calls_run   INTEGER NOT NULL DEFAULT 20,
+  runs_executed        INTEGER NOT NULL DEFAULT 0,
+  created_at           INTEGER NOT NULL,
+  activated_at         INTEGER,
+  last_run_at          INTEGER,
+  next_run_at          INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS monitoring_run (
+  id                   TEXT PRIMARY KEY,
+  company_id           TEXT NOT NULL,
+  mandate_id           TEXT NOT NULL,
+  connection_id        TEXT NOT NULL,
+  connection_revision  INTEGER NOT NULL,
+  data_version         TEXT NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'running'
+                       CHECK (status IN ('running', 'completed', 'failed', 'stale')),
+  trigger              TEXT NOT NULL,
+  started_at           INTEGER NOT NULL,
+  completed_at         INTEGER,
+  findings_json        TEXT,
+  drafts_json          TEXT,
+  tool_calls_json      TEXT,
+  provider             TEXT,
+  model                TEXT,
+  source               TEXT CHECK (source IN ('live_model', 'deterministic', 'failed')),
+  fallback_reason      TEXT,
+  error_message        TEXT,
+  tool_calls_used      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS monitoring_run_scope ON monitoring_run (company_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS monitoring_event (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id   TEXT NOT NULL,
+  event_type   TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at   INTEGER NOT NULL,
+  claimed_at   INTEGER,
+  claimed_by   TEXT,
+  run_id       TEXT
+);
+CREATE INDEX IF NOT EXISTS monitoring_event_pending
+  ON monitoring_event (company_id, created_at)
+  WHERE claimed_at IS NULL;
+
+-- One row per worker process, refreshed every poll. The UI reads the newest
+-- last_seen_at to tell an owner whether anything is actually able to run their
+-- mandate: an active mandate with no live worker does nothing, and saying so is
+-- the difference between "waiting" and "silently broken".
+CREATE TABLE IF NOT EXISTS monitoring_worker (
+  worker_id    TEXT PRIMARY KEY,
+  started_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
 `;
 
 let connection: DatabaseSync | null = null;

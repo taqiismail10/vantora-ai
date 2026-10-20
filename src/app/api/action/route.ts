@@ -56,6 +56,7 @@ import {
 import { visibleChainFor } from "@/lib/server/companies";
 import { parseCents } from "@/lib/server/money";
 import { loadPlanContext, matchProposal, parseScenarioRef, type PlanContext } from "@/lib/server/plan";
+import { queueFinancialChange } from "@/lib/server/monitoring";
 
 /** The dashboard only shows the gate-relevant half of a tool run. */
 function summarise(run: ToolRunResult) {
@@ -368,6 +369,8 @@ export async function POST(request: Request) {
         if (typeof body.actionKey !== "string") throw new AccessError(400, "actionKey is required");
         const plan = await loadPlanContext(actor.businessId, ref);
         const result = await simulateCounterparty(actor, plan, body.actionKey, body.response);
+        // A decline triggers a reassessment — the plan may no longer be feasible
+        if (body.response === "DECLINED") queueFinancialChange(actor.businessId, "counterparty_decline", { actionKey: body.actionKey });
         const revised = await loadPlanContext(actor.businessId, ref);
         return json({
           action: "simulate",

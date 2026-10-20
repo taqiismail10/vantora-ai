@@ -7,7 +7,7 @@
  * separated from notes so a missing payroll run cannot read like a footnote.
  */
 
-import { AlertTriangle, Info } from "lucide-react";
+import { TriangleAlert, Info } from "lucide-react";
 
 import type { DashboardState } from "@/lib/dashboard-state";
 
@@ -39,7 +39,7 @@ export function CoveragePanel({ coverage }: { coverage: DashboardState["coverage
               key={note.code}
               className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
             >
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
               <span>{note.message}</span>
             </li>
           ))}

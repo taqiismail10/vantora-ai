@@ -55,7 +55,7 @@ export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
                   : "border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900",
               )}
             >
-              <UserX className="size-3.5" />
+              <UserX className="size-3.5" aria-hidden />
               {branch.label}
               {branch.cost_delta !== null ? (
                 <span className="font-mono tabular-nums text-amber-700 dark:text-amber-400">
@@ -101,7 +101,7 @@ export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
             ) : (
               <div className="rounded-md border border-slate-900 bg-slate-900 p-3 text-slate-100 dark:border-slate-100/20">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-rose-400">
-                  <Ban className="size-3.5 shrink-0" />
+                  <Ban className="size-3.5 shrink-0" aria-hidden />
                   No feasible plan B
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-slate-300">{active.notes}</p>
@@ -199,7 +199,7 @@ export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
               days 31-45. The claim is scoped to what the data contains. */}
           <Verdict
             tone={noDefault ? "good" : "bad"}
-            icon={noDefault ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
+            icon={noDefault ? <CircleCheck className="size-4" aria-hidden /> : <Ban className="size-4" aria-hidden />}
             label="Obligations on the book"
             value={noDefault ? "Funded" : "Not funded"}
             detail={
@@ -210,7 +210,7 @@ export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
           />
           <Verdict
             tone={safe ? "good" : "warn"}
-            icon={safe ? <CircleCheck className="size-4" /> : <CircleAlert className="size-4" />}
+            icon={safe ? <CircleCheck className="size-4" aria-hidden /> : <CircleAlert className="size-4" aria-hidden />}
             label={`Safe buffer (${money(echo.buffer)})`}
             value={safe ? "Held" : `Dips to ${money2(echo.min_balance_withheld)}`}
             detail={
@@ -221,14 +221,19 @@ export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
           />
           <Verdict
             tone={echo.clears_buffer ? "good" : "warn"}
-            icon={<CalendarClock className="size-4" />}
+            icon={<CalendarClock className="size-4" aria-hidden />}
             label="If the blocked match clears"
             value={`+${money(echo.contingent_total)}`}
             detail={`Minimum rises to ${money2(echo.min_balance)} on day ${echo.min_balance_day}.`}
           />
         </div>
 
-        <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="Held-payment timeline"
+          className="overflow-x-auto rounded-md border border-slate-200 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-800"
+        >
           <table className="w-full text-[11px]">
             <thead className="bg-slate-50 dark:bg-slate-900/60">
               <tr>
@@ -382,7 +387,7 @@ export function PlanBJumpHint() {
       className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 underline decoration-dotted underline-offset-2 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
     >
       What if they say no?
-      <ArrowRight className="size-3" />
+      <ArrowRight className="size-3" aria-hidden />
     </a>
   );
 }

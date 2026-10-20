@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { Loader2, Undo2 } from "lucide-react";
+import { LoaderCircle, Undo2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -589,7 +589,12 @@ export function BalancesTable({
   if (rows.length === 0) return <Empty>Nothing outstanding. Add an invoice or a bill and it will appear here.</Empty>;
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+    <div
+      tabIndex={0}
+      role="region"
+      aria-label="Outstanding balances"
+      className="overflow-x-auto rounded-xl border border-slate-200 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-800"
+    >
       <table className="w-full text-xs">
         <caption className="sr-only">Outstanding balances: original amount, what has been applied, and what is left</caption>
         <thead className="bg-slate-50 text-left text-[11px] text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
@@ -707,7 +712,7 @@ function ReverseControl({
             .finally(() => setBusy(false));
         }}
       >
-        {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+        {busy ? <LoaderCircle className="size-3.5 animate-spin" aria-hidden /> : null}
         Confirm
       </Button>
       <Button size="sm" variant="ghost" className="h-7 px-1.5 text-[11px]" onClick={() => setOpen(false)}>

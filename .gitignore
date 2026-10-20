@@ -45,6 +45,9 @@ yarn-error.log*
 # ── local-only documentation ──────────────────────────────────────────────────
 /docs/
 
+# ── tracked submission copy (exempt from the *.jsonl rule above) ──────────────
+!/documentation/**/*.jsonl
+
 # ── agent / editor tooling ────────────────────────────────────────────────────
 /.agents/
 /.claude/
@@ -53,8 +56,12 @@ yarn-error.log*
 /.vscode/
 /.idea/
 /.playwright-mcp/
+/.serena/
 /CLAUDE.md
 /AGENTS.md
+
+# ── scratch / test output ─────────────────────────────────────────────────────
+/tmp/
 
 # ── env files ─────────────────────────────────────────────────────────────────
 .env*

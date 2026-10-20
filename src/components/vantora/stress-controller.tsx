@@ -14,7 +14,7 @@
  */
 
 import { useState } from "react";
-import { ChevronDown, Loader2, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, LoaderCircle, SlidersHorizontal } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { DashboardState } from "@/lib/dashboard-state";
@@ -121,7 +121,8 @@ export function StressController({
         <div
           role="group"
           aria-label="Scenario preset"
-          className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-slate-200 p-1 dark:border-slate-800"
+          tabIndex={0}
+          className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-slate-200 p-1 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-800"
         >
           {data.profile.available.map((option) => {
             const active = option.id === data.profile.id;
@@ -163,7 +164,7 @@ export function StressController({
               : "border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800",
           )}
         >
-          <SlidersHorizontal className="size-3.5" />
+          <SlidersHorizontal className="size-3.5" aria-hidden />
           Stress controls
           {custom ? (
             <Badge variant="outline" className="border-transparent bg-amber-200/70 font-mono text-[10px] text-amber-900 dark:bg-amber-900/60 dark:text-amber-100">
@@ -171,9 +172,9 @@ export function StressController({
             </Badge>
           ) : null}
           {busy ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
           ) : (
-            <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+            <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} aria-hidden />
           )}
         </button>
       </div>

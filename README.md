@@ -1,8 +1,33 @@
+<div align="center">
+  <img src="public/logo-vantora-ai.jpg" height="200px" alt="Vantora AI logo">
+
 # Vantora AI
 
 **An SME finance copilot that is allowed to reason, but never allowed to invent a number or move money on its own.**
 
-Vantora AI detects a small manufacturer's liquidity collision fourteen days before it lands, prices every way out of it with a Mixed-Integer Linear Program, and then refuses to act on any of it until the signed-in business owner approves that exact action — logging every decision, allowed or denied, to a tamper-evident SHA-256 chain.
+Vantora AI detects a small manufacturer's liquidity collision fourteen days before it lands, prices every way out of it with a Mixed-Integer Linear Program, and then refuses to act on any of it until the signed-in business owner approves that exact action — logging every decision, allowed or denied, to a tamper-evident SHA-256 chain. We built it because an SME treasurer cannot use a copilot that is only *probably* right about money: every figure here comes from a deterministic solver, never a model's guess.
+
+[![FinTechathon 2026](https://img.shields.io/badge/FinTechathon-2026%20International%20Track-blueviolet?style=flat-square)](https://github.com/taqiismail10/vantora-ai)
+[![Topic E](https://img.shields.io/badge/Topic%20E-SME%20Finance%20Copilot-0ea5e9?style=flat-square)](#1-why-this-exists)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-pending-lightgrey?style=flat-square)](#)
+[![Presentation Deck](https://img.shields.io/badge/Deck-%3C10%20min-lightgrey?style=flat-square)](#)
+[![Demo Video](https://img.shields.io/badge/Demo%20Video-%3C5%20min-lightgrey?style=flat-square)](#)
+
+<p align="center">
+<a href="https://github.com/taqiismail10/vantora-ai/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"/></a>
+<a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/></a>
+<img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-116%20files-3178c6?style=flat-square&logo=typescript&logoColor=white">
+<img alt="Python" src="https://img.shields.io/badge/Python-9%20files-3776ab?style=flat-square&logo=python&logoColor=white">
+<br/>
+<img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
+<img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white">
+<img alt="Prisma" src="https://img.shields.io/badge/Prisma-ORM-2D3748?style=flat-square&logo=prisma&logoColor=white">
+<img alt="Tailwind CSS" src="https://img.shields.io/badge/Tailwind%20CSS-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white">
+<img alt="PuLP + HiGHS" src="https://img.shields.io/badge/PuLP%20%2B%20HiGHS-MILP%20solver-4b5563?style=flat-square">
+<img alt="Better Auth" src="https://img.shields.io/badge/Better%20Auth-sessions-6366f1?style=flat-square">
+</p>
+
+</div>
 
 > **Synthetic sandbox.** Smart Jeans Manufacturing Ltd. and its ledger are invented. Buyer, supplier, lender and insurer names (Zara, Kenneth Cole, Atradius, Coface, …) are used illustratively; no affiliation with, or data from, any real company is implied. Nothing in this repository moves real money or contacts a real counterparty.
 
@@ -344,6 +369,14 @@ Four tabs under a verdict bar (how short — to zero and to the buffer; decide-b
 
 ---
 
+## 6.5 Production monitoring & per-company AI connections
+
+A company can hand Vantora its own model credential instead of relying on the process-wide `AI_PROVIDER` env — `POST /api/ai-connection` (`save` / `test` / `remove` / `get`) stores the key encrypted at rest and never returns it to the browser; `test` runs a real capability check against the provider before the connection is usable for anything else.
+
+Once a connection has passed its capability test, the owner can arm a **monitoring mandate** (`POST /api/monitoring`): a persistent worker (`worker/monitoring-worker.ts`) polls for due mandates, claims one run per company atomically, and drives the same bounded copilot tool loop used by the dashboard — Tier 0/1 only, Tier 2 stays human-approved. Each run is written to `monitoring_run` and surfaced back through `/monitoring` with its outcome labelled: a live model answer (`Gemini · <model>` / `OpenRouter · <model>`), or a **deterministic fallback** tagged with why it fell back (`insufficient_data`, `credential_error`, `timeout`, `integrity_failure`) — a fallback run is never silently presented as a live one, and never counts as live-model task completion.
+
+---
+
 ## 7. Project layout
 
 ```
@@ -376,10 +409,17 @@ src/
     agent/llm.ts, providers.ts shared tool loop and provider selection
     agent/gemini.ts, openrouter.ts  provider adapters
     agent/ask.ts               fallback and attestation
+    agent/monitoring-agent.ts  bounded tool loop for a monitoring run + labelled fallback
+    server/ai-connection.ts    per-company encrypted model credential, capability test
+    server/monitoring.ts       mandate CRUD, run history, worker heartbeat
+worker/
+  monitoring-worker.ts         persistent poller: claims due mandates, runs the agent
+  load-env.ts                  shared .env cascade (must load before db.ts)
 scripts/
   users.ts                     owner-run account provisioning
   benchmark-milp-vs-greedy.ts  the 216-scenario solver benchmark
   verify-evidence.ts           re-verify any frozen chain
+  kill-ports.mjs                dev-server port cleanup
 
 prisma/schema.prisma           optional ledger tables
 data/                          app SQLite database (git-ignored; never commit)

@@ -3,7 +3,7 @@
 /** Tab 1 — Liquidity Radar: where the cash breaks, and what it breaks on. */
 
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, ShieldAlert, ShieldCheck, Waves } from "lucide-react";
+import { TriangleAlert, ChevronDown, ShieldAlert, ShieldCheck, WavesHorizontal } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -254,7 +254,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                 className="inline-flex items-center gap-1.5 font-mono"
                 title="Systemic correlation between buyer payment delays. Above zero the whole receivables book slips together. Set it in the header stress drawer."
               >
-                <Waves className="size-3" aria-hidden />
+                <WavesHorizontal className="size-3" aria-hidden />
                 ρ = {rho.toFixed(1)}
                 {rho > 0 ? " · correlated" : " · independent"}
               </span>
@@ -333,7 +333,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
-            <Table className="text-xs">
+            <Table containerLabel="Accounts receivable" className="text-xs">
               <TableHeader>
                 <TableRow>
                   <TableHead>Invoice</TableHead>
@@ -426,7 +426,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                       <TableCell>
                         {!memo ? (
                           <span className="inline-flex items-center gap-1 text-slate-600">
-                            <ShieldCheck className="size-3" /> none
+                            <ShieldCheck className="size-3" aria-hidden /> none
                           </span>
                         ) : memo.quarantined ? (
                           <button
@@ -435,12 +435,12 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                             aria-expanded={expanded}
                             className="inline-flex items-center gap-1 rounded font-medium text-rose-700 underline decoration-dotted underline-offset-2 hover:text-rose-700 dark:text-rose-400"
                           >
-                            <ShieldAlert className="size-3" /> quarantined
-                            <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} />
+                            <ShieldAlert className="size-3" aria-hidden /> quarantined
+                            <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} aria-hidden />
                           </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
-                            <ShieldCheck className="size-3" /> clean
+                            <ShieldCheck className="size-3" aria-hidden /> clean
                           </span>
                         )}
                       </TableCell>
@@ -489,7 +489,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
-            <Table className="text-xs">
+            <Table containerLabel="Accounts payable" className="text-xs">
               <TableHeader>
                 <TableRow>
                   <TableHead>Payable</TableHead>
@@ -583,7 +583,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
                       <TableCell>
                         {payable.is_critical ? (
                           <span className="inline-flex items-center gap-1 font-medium text-rose-700 dark:text-rose-400">
-                            <AlertTriangle className="size-3" /> {money(payable.default_penalty ?? 0)}
+                            <TriangleAlert className="size-3" aria-hidden /> {money(payable.default_penalty ?? 0)}
                           </span>
                         ) : (
                           <span className="text-slate-600">—</span>
@@ -602,7 +602,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
         <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm text-rose-700 dark:text-rose-300">
-              <ShieldAlert className="size-4" /> Quarantined invoice memos
+              <ShieldAlert className="size-4" aria-hidden /> Quarantined invoice memos
             </CardTitle>
             <CardDescription className="text-xs text-slate-600 dark:text-slate-400">
               Screened before any model sees them. The raw text never leaves the API route; what follows is the

@@ -3,7 +3,7 @@
 /** Tab 4 — the verifiable execution ledger: logs/sandbox_operation_logs.jsonl, live. */
 
 import { useMemo, useRef, useState } from "react";
-import { Link2, Loader2, RotateCcw, ShieldCheck, ShieldX, Unlink } from "lucide-react";
+import { Link2, LoaderCircle, RotateCcw, ShieldCheck, ShieldX, Unlink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -182,13 +182,13 @@ export function AuditLedger({ data }: { data: DashboardState }) {
           </CardDescription>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button size="sm" onClick={verify} disabled={verifying} className="text-[11px]">
-              {verifying ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+              {verifying ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <ShieldCheck className="size-4" aria-hidden />}
               {verifying ? `Verifying… ${walkedTo ?? 0} / ${source.length}` : "Verify SHA-256 chain integrity"}
             </Button>
 
             {tampered ? (
               <Button size="sm" variant="outline" onClick={restore} disabled={verifying} className="text-[11px]">
-                <RotateCcw className="size-4" />
+                <RotateCcw className="size-4" aria-hidden />
                 Restore verified chain
               </Button>
             ) : (
@@ -199,7 +199,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                 disabled={verifying || source.length < TAMPER_SEQ}
                 className="text-[11px]"
               >
-                <Unlink className="size-4 text-slate-500" />
+                <Unlink className="size-4 text-slate-500" aria-hidden />
                 Simulate tamper on entry #{TAMPER_SEQ}
               </Button>
             )}
@@ -220,7 +220,9 @@ export function AuditLedger({ data }: { data: DashboardState }) {
               {verification.valid ? (
                 <>
                   ✓ {verification.length} of {verification.length} verified · chain intact from genesis
-                  {elapsedMs !== null ? ` · recomputed in ~${Math.max(elapsedMs, 1)}ms` : ""}
+                  {elapsedMs !== null
+                    ? ` · recomputed in ~${Math.max(elapsedMs, 1)}ms in this browser`
+                    : " · verified by the service when this page loaded"}
                 </>
               ) : (
                 <>
@@ -250,7 +252,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
         <CardContent className="px-0">
           {!verification.valid ? (
             <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-              <ShieldX className="mt-0.5 size-4 shrink-0" />
+              <ShieldX className="mt-0.5 size-4 shrink-0" aria-hidden />
               <span>
                 <span className="font-semibold">BROKEN at seq {verification.brokenAtSeq}</span> — {verification.reason}.
                 Chain broken from this point forward; every entry after it is untrustworthy.
@@ -258,7 +260,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
             </div>
           ) : null}
 
-          <Table className="text-xs">
+          <Table containerLabel="Audit log entries" className="text-xs">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-16">seq</TableHead>
@@ -308,9 +310,10 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                             )}
                           />
                           {atBreak ? (
-                            <Unlink className="relative size-2.5 text-rose-600 dark:text-rose-400" />
+                            <Unlink className="relative size-2.5 text-rose-600 dark:text-rose-400" aria-hidden />
                           ) : (
                             <Link2
+                              aria-hidden
                               className={cn(
                                 "relative size-2.5",
                                 after
@@ -347,7 +350,7 @@ export function AuditLedger({ data }: { data: DashboardState }) {
                           <span>timestamp {entry.timestamp}</span>
                           <span>payloadDigest {entry.payloadDigest}</span>
                           <span className="flex items-center gap-1">
-                            prev {entry.prevLogHash} <Link2 className="size-3" />
+                            prev {entry.prevLogHash} <Link2 className="size-3" aria-hidden />
                           </span>
                           <span className={cn(atBreak && "text-rose-600 dark:text-rose-400")}>
                             curr {entry.currentLogHash}

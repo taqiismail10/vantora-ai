@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { CircleCheck, Fingerprint, Lock, TriangleAlert } from "lucide-react";
+import { CircleCheck, FingerprintPattern, Lock, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -214,7 +214,7 @@ export function BuyerPortalPreview({
             label="Remit-to"
             value={
               <span className="inline-flex flex-wrap items-center gap-1.5">
-                <Fingerprint className="size-3.5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden />
+                <FingerprintPattern className="size-3.5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden />
                 <span className="font-mono text-[11px]">{shortDigest ?? "sha256 unavailable"}</span>
                 <span className="text-slate-500 dark:text-slate-400">
                   acct {PORTAL_RECORD.accountMask} · BEC protected
