@@ -1,5 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+/.github/workflows/
 # ── dependencies ──────────────────────────────────────────────────────────────
 /node_modules/
 /.pnp
@@ -77,6 +78,11 @@ yarn-error.log*
 /Screenshot 2026-10-19 222937.png
 /Screenshot 2026-10-19 222947.png
 /FinTechathon.pdf
+/logo-vantora-ai.jpg
+
+# ── unused scaffold (never wired into npm scripts; vitest + pytest are the real suites) ──
+/tests/
+/playwright.config.ts
 
 # Playwright
 node_modules/
