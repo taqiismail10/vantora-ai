@@ -9,9 +9,7 @@ Vantora AI detects a small manufacturer's liquidity collision fourteen days befo
 
 [![FinTechathon 2026](https://img.shields.io/badge/FinTechathon-2026%20International%20Track-blueviolet?style=flat-square)](https://github.com/taqiismail10/vantora-ai)
 [![Topic E](https://img.shields.io/badge/Topic%20E-SME%20Finance%20Copilot-0ea5e9?style=flat-square)](#1-why-this-exists)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-pending-lightgrey?style=flat-square)](#)
 [![Presentation Deck](https://img.shields.io/badge/Deck-%3C10%20min-lightgrey?style=flat-square)](#)
-[![Demo Video](https://img.shields.io/badge/Demo%20Video-%3C5%20min-lightgrey?style=flat-square)](#)
 
 <p align="center">
 <a href="https://github.com/taqiismail10/vantora-ai/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"/></a>
