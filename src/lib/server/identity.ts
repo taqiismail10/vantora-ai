@@ -64,6 +64,21 @@ export class AccessError extends Error {
   }
 }
 
+/**
+ * The company exists and the caller may act for it, but it holds too little
+ * data to forecast — the owner has to finish onboarding.
+ *
+ * A distinct type, not a bare 409, because the caller's response is to send
+ * the owner to onboarding, and any other conflict must not be mistaken for
+ * that and bounced into a loop.
+ */
+export class CompanyNotReadyError extends AccessError {
+  constructor(message: string) {
+    super(409, message);
+    this.name = "CompanyNotReadyError";
+  }
+}
+
 const IDENTITY_FIELDS = [
   "actorId",
   "actorType",

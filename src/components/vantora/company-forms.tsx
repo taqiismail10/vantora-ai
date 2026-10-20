@@ -29,7 +29,7 @@ import {
   type ReceivableRow,
 } from "./company-api";
 
-const INPUT =
+export const INPUT =
   "h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-700 dark:bg-slate-950";
 
 export function Field({
@@ -92,7 +92,7 @@ export function Check({
 }
 
 /** Shared submit plumbing: busy state, server error, reset on success. */
-function useSubmit(onSaved: () => void) {
+export function useSubmit(onSaved: () => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async (work: () => Promise<unknown>, reset?: () => void) => {
@@ -111,7 +111,7 @@ function useSubmit(onSaved: () => void) {
   return { busy, error, run, setError };
 }
 
-function FormShell({
+export function FormShell({
   title,
   description,
   error,
@@ -344,13 +344,100 @@ export function CounterpartyForm({ onSaved }: { onSaved: () => void }) {
           </Field>
           <Check
             label="Critical supplier"
-            hint="Never proposed for a deferral — delaying them stops the work."
+            hint="Does not block a deferral by itself — it adds a cost penalty the optimizer weighs against the alternative. A bill is only ever excluded from deferral by its own terms (below, or when entering a bill), never by criticality alone."
             checked={isCritical}
             onChange={setCritical}
           />
         </div>
       ) : null}
     </FormShell>
+  );
+}
+
+/**
+ * Edits an existing supplier's constraints in place.
+ *
+ * This changes the *default* a future bill inherits — never a bill already
+ * posted. That is `updateCounterparty`'s own guarantee server-side, not just
+ * UI copy: a posted bill's terms are a snapshot taken at entry, so this can
+ * never silently rewrite one.
+ */
+function CounterpartyTermsEditor({ party, onSaved }: { party: CounterpartyRow; onSaved: () => void }) {
+  const [isCritical, setCritical] = useState(party.profile.is_critical === true);
+  const [lineStopRisk, setLineStopRisk] = useState(
+    typeof party.profile.line_stop_risk === "string" ? party.profile.line_stop_risk : "",
+  );
+  const [isFlexible, setFlexible] = useState(party.profile.is_flexible === true);
+  const [maxDeferralDays, setMaxDeferral] = useState(
+    typeof party.profile.max_deferral_days === "number" ? String(party.profile.max_deferral_days) : "",
+  );
+  const { busy, error, run } = useSubmit(onSaved);
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(() =>
+          companyAction("update_counterparty", {
+            id: party.id,
+            isCritical,
+            lineStopRisk,
+            isFlexible,
+            ...(isFlexible && maxDeferralDays ? { maxDeferralDays } : isFlexible ? {} : { maxDeferralDays: 0 }),
+          }),
+        );
+      }}
+      className="col-span-full flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900"
+    >
+      <Check
+        label="Critical supplier"
+        hint="Adds a cost penalty the optimizer weighs against delaying them — it does not by itself exclude them from a deferral proposal."
+        checked={isCritical}
+        onChange={setCritical}
+      />
+      <Field
+        label="Production-interruption risk"
+        hint="What not paying them on time would actually cause. Shown as context, not read by the solver."
+      >
+        {(id) => (
+          <input
+            id={id}
+            className={INPUT}
+            value={lineStopRisk}
+            onChange={(e) => setLineStopRisk(e.target.value)}
+            placeholder="e.g. halts the dye line within 48 hours"
+          />
+        )}
+      </Field>
+      <Check
+        label="Would accept a later payment, by default"
+        hint="The default a new bill from this supplier inherits. Leaving this off makes a new bill fixed unless you say otherwise when entering it. Never changes a bill you already entered."
+        checked={isFlexible}
+        onChange={setFlexible}
+      />
+      {isFlexible ? (
+        <Field label="Agreed deferral limit, in days" hint="Blank means no limit is assumed — treated as 0.">
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              className={INPUT}
+              value={maxDeferralDays}
+              onChange={(e) => setMaxDeferral(e.target.value)}
+            />
+          )}
+        </Field>
+      ) : null}
+      {error ? (
+        <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-2 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" size="sm" disabled={busy} className="w-fit">
+        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        Save supplier terms
+      </Button>
+    </form>
   );
 }
 
@@ -363,6 +450,7 @@ export function CounterpartyList({
   onChanged: () => void;
   readOnly?: boolean;
 }) {
+  const [editing, setEditing] = useState<string | null>(null);
   if (counterparties.length === 0) {
     return <Empty>No buyers or suppliers yet. Add them first — invoices and bills attach to one.</Empty>;
   }
@@ -386,12 +474,31 @@ export function CounterpartyList({
               critical
             </Badge>
           ) : null}
+          {readOnly || !party.isSupplier ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing((current) => (current === party.id ? null : party.id))}
+            >
+              {editing === party.id ? "Close" : "Edit terms"}
+            </Button>
+          )}
           {readOnly ? null : (
             <DeleteButton
               label={`Remove ${party.name}`}
               onDelete={() => void companyAction("delete_counterparty", { id: party.id }).then(onChanged).catch(() => onChanged())}
             />
           )}
+          {editing === party.id ? (
+            <CounterpartyTermsEditor
+              party={party}
+              onSaved={() => {
+                setEditing(null);
+                onChanged();
+              }}
+            />
+          ) : null}
         </li>
       ))}
     </ul>
@@ -505,6 +612,11 @@ export function ReceivableList({
           {row.status !== "open" ? (
             <Badge variant="outline" className={cn("font-mono text-[10px]", STATUS_STYLE[row.status])}>
               {row.status}
+            </Badge>
+          ) : null}
+          {row.source === "csv_import" ? (
+            <Badge variant="outline" className="font-mono text-[10px] text-slate-500" title="Entered by CSV import, not reconciled against a bank">
+              imported
             </Badge>
           ) : null}
           <span className="font-medium tabular-nums">{formatMinor(row.amountCents, currency)}</span>
@@ -635,6 +747,75 @@ export function PayableForm({
   );
 }
 
+/**
+ * Overrides one already-posted bill's own deferral/criticality terms.
+ *
+ * Unlike a supplier-default edit, this changes `payable.terms` directly — the
+ * exact field the next forecast and solve read — so it takes effect on the
+ * next calculation for this bill specifically, without touching any other
+ * bill from the same supplier or any other company.
+ */
+function PayableTermsEditor({ row, onSaved }: { row: PayableRow; onSaved: () => void }) {
+  const [isFlexible, setFlexible] = useState(row.terms.is_flexible === true);
+  const [maxDeferralDays, setMaxDeferral] = useState(
+    typeof row.terms.max_deferral_days === "number" ? String(row.terms.max_deferral_days) : "",
+  );
+  const [isCritical, setCritical] = useState(row.terms.is_critical === true);
+  const { busy, error, run } = useSubmit(onSaved);
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(() =>
+          companyAction("update_payable", {
+            id: row.id,
+            isCritical,
+            isFlexible,
+            ...(isFlexible && maxDeferralDays ? { maxDeferralDays } : isFlexible ? {} : { maxDeferralDays: 0 }),
+          }),
+        );
+      }}
+      className="col-span-full flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900"
+    >
+      <Check
+        label="This specific bill would accept a later payment"
+        hint="Overrides the supplier's default for this bill only. Off makes it fixed, whatever the supplier's default says."
+        checked={isFlexible}
+        onChange={setFlexible}
+      />
+      {isFlexible ? (
+        <Field label="Agreed deferral limit, in days" hint="Blank means no limit is assumed — treated as 0.">
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              className={INPUT}
+              value={maxDeferralDays}
+              onChange={(e) => setMaxDeferral(e.target.value)}
+            />
+          )}
+        </Field>
+      ) : null}
+      <Check
+        label="Critical for this bill"
+        hint="Adds a cost penalty if this bill is delayed. Does not by itself exclude it from a deferral proposal."
+        checked={isCritical}
+        onChange={setCritical}
+      />
+      {error ? (
+        <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-2 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" size="sm" disabled={busy} className="w-fit">
+        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        Save this bill&rsquo;s terms
+      </Button>
+    </form>
+  );
+}
+
 export function PayableList({
   payables,
   currency,
@@ -646,6 +827,7 @@ export function PayableList({
   onChanged: () => void;
   readOnly?: boolean;
 }) {
+  const [editing, setEditing] = useState<string | null>(null);
   if (payables.length === 0) return <Empty>No bills recorded yet. Payroll is the one most likely to change a forecast.</Empty>;
   return (
     <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800/60 dark:border-slate-800">
@@ -672,13 +854,42 @@ export function PayableList({
               fixed
             </Badge>
           )}
+          {row.terms.is_critical === true ? (
+            <Badge variant="outline" className="border-transparent bg-rose-100 font-mono text-[10px] text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+              critical
+            </Badge>
+          ) : null}
+          {row.source === "csv_import" ? (
+            <Badge variant="outline" className="font-mono text-[10px] text-slate-500" title="Entered by CSV import, not reconciled against a bank">
+              imported
+            </Badge>
+          ) : null}
           <span className="font-medium tabular-nums">{formatMinor(row.amountCents, currency)}</span>
+          {readOnly || row.isPayroll ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing((current) => (current === row.id ? null : row.id))}
+            >
+              {editing === row.id ? "Close" : "Edit terms"}
+            </Button>
+          )}
           {readOnly ? null : (
             <DeleteButton
               label={`Remove bill from ${row.counterpartyName}`}
               onDelete={() => void companyAction("delete_payable", { id: row.id }).then(onChanged)}
             />
           )}
+          {editing === row.id ? (
+            <PayableTermsEditor
+              row={row}
+              onSaved={() => {
+                setEditing(null);
+                onChanged();
+              }}
+            />
+          ) : null}
         </li>
       ))}
     </ul>
@@ -765,6 +976,113 @@ export function FacilityForm({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+/**
+ * Edits an existing facility's own limit, rate, fees and eligibility terms.
+ *
+ * "Limit" here is always the total contractual ceiling the lender agreed to
+ * — never what remains available to draw today, which is computed fresh for
+ * every plan (reduced by AR-coverage caps and anything already drawn) and
+ * is never a number you can type in. Changing it here never rewrites a draw
+ * already recorded: those keep the rate and terms that applied when they
+ * were approved.
+ */
+function FacilityTermsEditor({ facility, onSaved }: { facility: FacilityRow; onSaved: () => void }) {
+  const [provider, setProvider] = useState(facility.provider);
+  const [maxAmount, setMax] = useState(String(facility.maxAmountCents / 100));
+  const [aprPercent, setApr] = useState(String(facility.apr * 100));
+  const [fundingDays, setDays] = useState(
+    typeof facility.terms.funding_days === "number" ? String(facility.terms.funding_days) : "",
+  );
+  const [originationFeePercent, setFee] = useState(
+    typeof facility.terms.origination_fee_pct === "number" ? String(facility.terms.origination_fee_pct * 100) : "",
+  );
+  const [requiresArCollateral, setRequiresAr] = useState(facility.terms.requires_ar_collateral === true);
+  const [arCoverageRatio, setCoverage] = useState(
+    typeof facility.terms.ar_coverage_ratio === "number" ? String(facility.terms.ar_coverage_ratio) : "",
+  );
+  const [minCreditScore, setMinScore] = useState(
+    typeof facility.terms.min_credit_score === "number" ? String(facility.terms.min_credit_score) : "",
+  );
+  const [isExistingFacility, setExisting] = useState(facility.terms.is_existing_facility === true);
+  const { busy, error, run } = useSubmit(onSaved);
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(() =>
+          companyAction("update_facility", {
+            id: facility.id,
+            provider,
+            maxAmount,
+            apr: aprPercent === "" ? "" : Number(aprPercent) / 100,
+            ...(fundingDays ? { fundingDays } : {}),
+            ...(originationFeePercent ? { originationFeePct: Number(originationFeePercent) / 100 } : {}),
+            requiresArCollateral,
+            ...(requiresArCollateral && arCoverageRatio ? { arCoverageRatio } : {}),
+            ...(minCreditScore ? { minCreditScore } : {}),
+            isExistingFacility,
+          }),
+        );
+      }}
+      className="col-span-full flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900"
+    >
+      <Field label="Lender" required>
+        {(id) => <input id={id} className={INPUT} value={provider} onChange={(e) => setProvider(e.target.value)} />}
+      </Field>
+      <Field label="Total credit limit" required hint="The lender's ceiling, not what is left to draw today — that is worked out fresh each time, from this limit minus anything already drawn.">
+        {(id) => <input id={id} inputMode="decimal" className={INPUT} value={maxAmount} onChange={(e) => setMax(e.target.value)} />}
+      </Field>
+      <Field label="APR %" required hint="As a percentage, for example 18 for 18%.">
+        {(id) => <input id={id} inputMode="decimal" className={INPUT} value={aprPercent} onChange={(e) => setApr(e.target.value)} />}
+      </Field>
+      <Field label="Days until funds arrive" hint="Blank is treated as slow (30 days), never as instant. A longer delay can make a facility unable to reach an obligation in time.">
+        {(id) => <input id={id} inputMode="numeric" className={INPUT} value={fundingDays} onChange={(e) => setDays(e.target.value)} />}
+      </Field>
+      <Field label="Origination fee %" hint="As a percentage of the amount drawn.">
+        {(id) => (
+          <input id={id} inputMode="decimal" className={INPUT} value={originationFeePercent} onChange={(e) => setFee(e.target.value)} />
+        )}
+      </Field>
+      <Field label="Minimum credit score required" hint="Blank means the lender stated none; a facility is screened out, not assumed eligible, when the company's own score is below what you enter here.">
+        {(id) => (
+          <input id={id} inputMode="numeric" className={INPUT} value={minCreditScore} onChange={(e) => setMinScore(e.target.value)} />
+        )}
+      </Field>
+      <div className="col-span-full flex flex-col gap-2">
+        <Check
+          label="Secured against receivables"
+          hint="What is actually available is capped by pledgeable AR, not by the limit above."
+          checked={requiresArCollateral}
+          onChange={setRequiresAr}
+        />
+        {requiresArCollateral ? (
+          <Field label="AR coverage ratio" hint="How many dollars of receivables the lender wants pledged per dollar drawn, for example 1.2.">
+            {(id) => (
+              <input id={id} inputMode="decimal" className={INPUT} value={arCoverageRatio} onChange={(e) => setCoverage(e.target.value)} />
+            )}
+          </Field>
+        ) : null}
+      </div>
+      <Check
+        label="Already approved and in place"
+        hint="No fresh application needed to draw on it."
+        checked={isExistingFacility}
+        onChange={setExisting}
+      />
+      {error ? (
+        <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-2 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" size="sm" disabled={busy} className="w-fit">
+        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+        Save facility terms
+      </Button>
+    </form>
+  );
+}
+
 export function FacilityList({
   facilities,
   currency,
@@ -776,6 +1094,7 @@ export function FacilityList({
   onChanged: () => void;
   readOnly?: boolean;
 }) {
+  const [editing, setEditing] = useState<string | null>(null);
   if (facilities.length === 0) {
     return (
       <Empty>
@@ -795,13 +1114,32 @@ export function FacilityList({
             </span>
           </span>
           <span className="tabular-nums text-slate-500 dark:text-slate-400">{(row.apr * 100).toFixed(1)}% APR</span>
-          <span className="font-medium tabular-nums">{formatMinor(row.maxAmountCents, currency)}</span>
+          <span className="font-medium tabular-nums">{formatMinor(row.maxAmountCents, currency)} limit</span>
+          {readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing((current) => (current === row.id ? null : row.id))}
+            >
+              {editing === row.id ? "Close" : "Edit terms"}
+            </Button>
+          )}
           {readOnly ? null : (
             <DeleteButton
               label={`Remove facility from ${row.provider}`}
               onDelete={() => void companyAction("delete_facility", { id: row.id }).then(onChanged)}
             />
           )}
+          {editing === row.id ? (
+            <FacilityTermsEditor
+              facility={row}
+              onSaved={() => {
+                setEditing(null);
+                onChanged();
+              }}
+            />
+          ) : null}
         </li>
       ))}
     </ul>

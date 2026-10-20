@@ -25,11 +25,16 @@ import type { ArInvoiceInput } from "@/lib/quant-client";
 import { scheduledArrival } from "@/lib/recovery-scenarios";
 import { cn } from "@/lib/utils";
 
-import { currencySymbol, money, pct } from "./primitives";
+import { pct, useMoney } from "./primitives";
 
-/** Settlement figures are quoted to the cent, round number or not. */
-const exact = (value: number) =>
-  `${currencySymbol()}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/**
+ * Settlement figures are quoted to the cent, round number or not.
+ *
+ * Built from the caller's bound formatter rather than a module-level symbol,
+ * so the figures carry the currency of the company actually being rendered.
+ */
+const exactWith = (symbol: string, locale: string) => (value: number) =>
+  `${symbol}${value.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** The buyer's own reference for this shipment, and where the money goes. */
 const PORTAL_RECORD = {
@@ -148,6 +153,8 @@ export function BuyerPortalPreview({
   /** Bank file cutoff. Cash arriving after it cannot fund the run it was raised for. */
   payrollLockDay: number | null;
 }) {
+  const { money, symbol, locale } = useMoney();
+  const exact = exactWith(symbol, locale);
   const [stop, setStop] = useState(0);
   const [digest, setDigest] = useState<string | null>(null);
 

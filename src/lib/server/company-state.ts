@@ -22,6 +22,7 @@ import type { ApPayableInput, ArInvoiceInput, FinancingOptionInput, SmeFinancial
 import { sha256 } from "../sandbox/execution-logger";
 import { getPolicies, type Company } from "./companies";
 import { companyRecords } from "./records";
+import { futureCashCents, listPayments, netCashCents, obligationBalances } from "./settlements";
 import { formatCents, fromCents } from "./money";
 
 /** The engine validates `due_day` as 1..30; see quant_engine/schemas.py. */
@@ -80,6 +81,7 @@ const numberOr = (raw: string | undefined, fallback: number): number => {
  */
 export function companyDataset(company: Company, asOf = today()): CompanyDataset {
   const { accounts, receivables, payables, facilities } = companyRecords(company.id);
+  const payments = listPayments(company.id);
   const policies = getPolicies(company.id);
   const coverage: CoverageNote[] = [];
 
@@ -90,7 +92,14 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
   // --- Cash -------------------------------------------------------------
   const open = accounts.filter((a) => !a.isRestricted);
   const restricted = accounts.filter((a) => a.isRestricted);
-  const currentCents = open.reduce((sum, a) => sum + a.openingCents, 0);
+  // Opening balances plus everything that has moved since. A payment already
+  // inside an opening balance carries affects_cash = 0 and is not added here,
+  // so recording it cannot count the same money twice.
+  const openingCents = open.reduce((sum, a) => sum + a.openingCents, 0);
+  const settledSinceCents = netCashCents(company.id, asOf);
+  const currentCents = openingCents + settledSinceCents;
+  const balances = obligationBalances(company.id);
+  const expectedLaterCents = futureCashCents(company.id, asOf);
 
   if (accounts.length === 0) {
     coverage.push({
@@ -126,12 +135,20 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
   // --- Receivables ------------------------------------------------------
   const invoices: ArInvoiceInput[] = [];
   let assumedReliability = 0;
+  let settledReceivables = 0;
   for (const receivable of receivables) {
     if (receivable.status === "cancelled") continue;
+    // What is still owed, not what was originally invoiced: anything already
+    // collected has become cash and must not also be forecast as arriving.
+    const outstanding = balances.get(receivable.id)?.remainingCents ?? receivable.amountCents;
+    if (outstanding <= 0) {
+      settledReceivables += 1;
+      continue;
+    }
     const day = dayNumber(asOf, receivable.dueDate);
     if (day > ENGINE_HORIZON_DAYS) {
       beyondHorizon += 1;
-      beyondHorizonCents += receivable.amountCents;
+      beyondHorizonCents += outstanding;
       continue;
     }
     if (day < 1) overdue += 1;
@@ -144,7 +161,7 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
     invoices.push({
       id: receivable.id,
       customer_name: receivable.counterpartyName,
-      amount: fromCents(receivable.amountCents),
+      amount: fromCents(outstanding),
       due_day: Math.max(1, Math.min(ENGINE_HORIZON_DAYS, day)),
       expected_delay_days_mean: typeof terms.expected_delay_days_mean === "number" ? terms.expected_delay_days_mean : 0,
       expected_delay_days_std: typeof terms.expected_delay_days_std === "number" ? terms.expected_delay_days_std : 1,
@@ -183,12 +200,18 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
   // --- Payables ---------------------------------------------------------
   const bills: ApPayableInput[] = [];
   let unstatedTerms = 0;
+  let settledPayables = 0;
   for (const payable of payables) {
     if (payable.status === "cancelled") continue;
+    const outstanding = balances.get(payable.id)?.remainingCents ?? payable.amountCents;
+    if (outstanding <= 0) {
+      settledPayables += 1;
+      continue;
+    }
     const day = dayNumber(asOf, payable.dueDate);
     if (day > ENGINE_HORIZON_DAYS) {
       beyondHorizon += 1;
-      beyondHorizonCents += payable.amountCents;
+      beyondHorizonCents += outstanding;
       continue;
     }
     if (day < 1) overdue += 1;
@@ -203,7 +226,7 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
     bills.push({
       id: payable.id,
       supplier_name: payable.counterpartyName,
-      amount: fromCents(payable.amountCents),
+      amount: fromCents(outstanding),
       due_day: Math.max(1, Math.min(ENGINE_HORIZON_DAYS, day)),
       is_flexible: flexible,
       ...(flexible && typeof terms.max_deferral_days === "number"
@@ -306,6 +329,45 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
     });
   }
 
+  // --- Settlement -------------------------------------------------------
+  if (settledSinceCents !== 0) {
+    coverage.push({
+      level: "info",
+      code: "cash_from_payments",
+      message: `Current cash is the opening balances of ${formatCents(openingCents, company.currency)} plus ${formatCents(
+        settledSinceCents,
+        company.currency,
+      )} of recorded payments since. Payments dated on or before an opening balance are not added again.`,
+    });
+  }
+  if (expectedLaterCents !== 0) {
+    coverage.push({
+      level: "info",
+      code: "future_dated_payments",
+      message: `${formatCents(expectedLaterCents, company.currency)} of recorded payments are dated after today and are not counted as cash you hold now.`,
+    });
+  }
+  if (settledReceivables || settledPayables) {
+    coverage.push({
+      level: "info",
+      code: "settled_excluded",
+      message: `${settledReceivables + settledPayables} record${
+        settledReceivables + settledPayables === 1 ? " is" : "s are"
+      } fully settled and excluded from the forecast; the money is already in the cash position.`,
+    });
+  }
+  const unallocated = payments.filter((p) => !p.reversedAt && p.unallocatedCents > 0);
+  if (unallocated.length) {
+    const total = unallocated.reduce((sum, p) => sum + p.unallocatedCents, 0);
+    coverage.push({
+      level: "warning",
+      code: "unallocated_payments",
+      message: `${formatCents(total, company.currency)} across ${unallocated.length} payment${
+        unallocated.length === 1 ? "" : "s"
+      } is not yet matched to an invoice or bill, so those obligations still show as outstanding.`,
+    });
+  }
+
   // --- Window edges -----------------------------------------------------
   if (overdue) {
     coverage.push({
@@ -334,6 +396,11 @@ export function companyDataset(company: Company, asOf = today()): CompanyDataset
       payables: payables.map((p) => [p.id, p.amountCents, p.dueDate, p.status, p.isPayroll, p.payrollLockDate, p.terms]),
       facilities: facilities.map((f) => [f.id, f.maxAmountCents, f.apr, f.terms]),
       policies: Object.entries(policies).map(([k, v]) => [k, v?.value]),
+      // Settlement changes what is outstanding and what cash is held, so they
+      // belong in the fingerprint: recording a payment must invalidate this
+      // company's outstanding plans and approvals.
+      settlement: [...balances.values()].map((b) => [b.id, b.paidCents, b.adjustedCents, b.remainingCents]),
+      cash: [openingCents, settledSinceCents, expectedLaterCents],
     }),
   ).slice(0, 12);
 

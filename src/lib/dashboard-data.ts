@@ -31,7 +31,7 @@ import { classifyOperation, verifyNumericalIntegrity } from "./security/permissi
 import { pendingApprovals } from "./server/approvals";
 import { getCompany, visibleChainFor } from "./server/companies";
 import { companyDataset, coverageHeadline } from "./server/company-state";
-import { AccessError, ROLE_CAPABILITIES, type HumanActor } from "./server/identity";
+import { CompanyNotReadyError, ROLE_CAPABILITIES, type HumanActor } from "./server/identity";
 import { toCents } from "./server/money";
 import {
   AS_OF_DATE,
@@ -55,6 +55,15 @@ function benchmark(): DashboardState["benchmark"] {
   }
 }
 
+/**
+ * The company exists but has nothing to forecast from yet.
+ *
+ * A distinct type, not a bare 409, because the caller's response is to send
+ * the owner to onboarding — and any other conflict reaching the dashboard
+ * builder must not be mistaken for that and bounced into a loop.
+ */
+export { CompanyNotReadyError };
+
 export async function buildDashboardState(actor: HumanActor, ref: ScenarioRef): Promise<DashboardState> {
   const presetId = ref.preset;
   const preset = SCENARIO_PRESETS[presetId];
@@ -68,7 +77,7 @@ export async function buildDashboardState(actor: HumanActor, ref: ScenarioRef): 
 
   if (dataset && !dataset.state) {
     const blocking = dataset.coverage.find((note) => note.level === "blocking");
-    throw new AccessError(409, blocking?.message ?? "This company has no financial data yet.");
+    throw new CompanyNotReadyError(blocking?.message ?? "This company has no financial data yet.");
   }
 
   // The workforce dial rewrites payroll with the demonstration plant's
@@ -95,6 +104,7 @@ export async function buildDashboardState(actor: HumanActor, ref: ScenarioRef): 
           profileId: dataset.company.id,
           dataVersion: dataset.dataVersion,
           planSlug: dataset.company.id,
+          currency: dataset.company.currency,
         }
       : undefined,
   );

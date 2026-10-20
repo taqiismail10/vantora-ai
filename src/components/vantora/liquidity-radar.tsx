@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 
 import { dayDate } from "./dates";
 import { FanChart } from "./fan-chart";
-import { DeterministicBadge, KpiCard, Metric, money, money2, pct, SectionHeading } from "./primitives";
+import { crunchDayIndex, DeterministicBadge, KpiCard, Metric, pct, SectionHeading, useMoney } from "./primitives";
 
 /** Mirrors the ranker: these two dilute the borrowing base, the others do not. */
 const MATCH_EXCEPTIONS = new Set(["QTY_VARIANCE", "PRICE_VARIANCE"]);
@@ -125,6 +125,7 @@ function StruckMemo({ text, spans }: { text: string; spans: string[] }) {
 }
 
 export function LiquidityRadar({ data }: { data: DashboardState }) {
+  const { money, money2 } = useMoney();
   const [showRecovery, setShowRecovery] = useState(false);
   const [showQuantMath, setShowQuantMath] = useState(false);
   const [showTable, setShowTable] = useState(false);
@@ -137,14 +138,15 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
   const pledgeable = pledgeableAr(state);
   const dilution = state.invoices_ar.reduce((sum, i) => sum + i.amount, 0) - pledgeable;
   const crunchDay = forecast.first_shortfall_day ?? optimization.crunch_day;
-  const crunchP10 = forecast.p10_trajectory[crunchDay - 1];
+  const crunchIndex = crunchDayIndex(crunchDay);
+  const crunchP10 = forecast.p10_trajectory[crunchIndex];
   const wc = forecast.working_capital_metrics;
   const meanSpread =
     forecast.p90_trajectory.reduce((sum, v, i) => sum + (v - forecast.p10_trajectory[i]), 0) /
     forecast.horizon_days;
   const windows = uncertaintyWindows(forecast);
   const crunchCoincides =
-    forecast.p10_trajectory[crunchDay - 1] === forecast.p90_trajectory[crunchDay - 1];
+    forecast.p10_trajectory[crunchIndex] === forecast.p90_trajectory[crunchIndex];
 
   return (
     <div className="flex flex-col gap-4">
@@ -163,8 +165,8 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
         <KpiCard
           label={`Day-${crunchDay} P10 projected cash`}
           value={money(crunchP10)}
-          sublabel={`P50 ${money(forecast.p50_trajectory[crunchDay - 1])} · P90 ${money(
-            forecast.p90_trajectory[crunchDay - 1],
+          sublabel={`P50 ${money(forecast.p50_trajectory[crunchIndex])} · P90 ${money(
+            forecast.p90_trajectory[crunchIndex],
           )}`}
           // Neutral on purpose. The verdict bar above owns the one large rose
           // number on the page; these cards are the evidence behind it, and a
@@ -259,7 +261,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
               {crunchCoincides ? (
                 <span>
                   P10 = P50 = P90 on day {crunchDay}: at least 80% of runs end that day on exactly{" "}
-                  {money(forecast.p10_trajectory[crunchDay - 1])}, because in those runs exactly the same receivables have
+                  {money(forecast.p10_trajectory[crunchIndex])}, because in those runs exactly the same receivables have
                   arrived by then. Some runs do differ — an invoice early or late — but fewer than 10% each way, so the
                   percentiles cannot show them. That is certainty inside the model (authored payment-delay
                   assumptions, fixed bills, no new sales), not a guarantee about real buyers.
@@ -298,9 +300,18 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
 
           {/* Working-capital facts are context, not alarms: neutral ink. */}
           <div className="mt-2 grid gap-x-8 gap-y-0 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Days sales outstanding" value={`${wc.days_sales_outstanding} d`} />
-            <Metric label="Days payable outstanding (COGS)" value={`${wc.days_payable_outstanding} d`} />
-            <Metric label="Cash conversion gap" value={`${wc.cash_conversion_gap_days} d`} />
+            <Metric
+              label="Days sales outstanding"
+              value={wc.days_sales_outstanding === null ? "—" : `${wc.days_sales_outstanding} d`}
+            />
+            <Metric
+              label="Days payable outstanding (COGS)"
+              value={wc.days_payable_outstanding === null ? "—" : `${wc.days_payable_outstanding} d`}
+            />
+            <Metric
+              label="Cash conversion gap"
+              value={wc.cash_conversion_gap_days === null ? "—" : `${wc.cash_conversion_gap_days} d`}
+            />
             <Metric label="P50 runway" value={`${wc.runway_days_p50} d`} />
           </div>
         </CardContent>
@@ -650,6 +661,7 @@ export function LiquidityRadar({ data }: { data: DashboardState }) {
 
 /** The fan chart's numbers, for anyone who cannot or would rather not read a chart. */
 function ForecastTable({ data, showRecovery }: { data: DashboardState; showRecovery: boolean }) {
+  const { money } = useMoney();
   const { forecast } = data;
   return (
     <div id="fan-chart-table" className="mt-3 max-h-80 overflow-auto rounded-md border border-slate-200 dark:border-slate-800">

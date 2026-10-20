@@ -201,6 +201,139 @@ CREATE TABLE IF NOT EXISTS financing_facility (
 );
 CREATE INDEX IF NOT EXISTS financing_facility_scope ON financing_facility (company_id);
 
+-- Settlement: money that moved, changes to what is owed, and what each one
+-- was applied to. Kept as three tables because they are three different
+-- things — a payment moves cash, an adjustment does not, and an allocation
+-- only points an existing one at an obligation. Posted rows are never edited
+-- or deleted; a reversal stamps the row and every computation skips it.
+CREATE TABLE IF NOT EXISTS payment (
+  id              TEXT PRIMARY KEY,
+  company_id      TEXT NOT NULL,
+  direction       TEXT NOT NULL CHECK (direction IN ('receipt', 'disbursement')),
+  counterparty_id TEXT,
+  amount_cents    INTEGER NOT NULL CHECK (amount_cents > 0),
+  currency        TEXT NOT NULL,
+  -- When the money moved in the real world. Drives cash; recorded_at does not.
+  effective_date  TEXT NOT NULL,
+  -- 0 when the money is already inside an opening balance.
+  affects_cash    INTEGER NOT NULL DEFAULT 1,
+  method          TEXT NOT NULL DEFAULT '',
+  reference       TEXT,
+  idempotency_key TEXT,
+  reversed_at     INTEGER,
+  reversed_by     TEXT,
+  reversal_reason TEXT,
+  recorded_at     INTEGER NOT NULL,
+  created_by      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payment_scope ON payment (company_id, effective_date);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_idempotency_once
+  ON payment (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS adjustment (
+  id              TEXT PRIMARY KEY,
+  company_id      TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('credit_note', 'debit_note')),
+  target_kind     TEXT NOT NULL CHECK (target_kind IN ('receivable', 'payable')),
+  counterparty_id TEXT,
+  amount_cents    INTEGER NOT NULL CHECK (amount_cents > 0),
+  effective_date  TEXT NOT NULL,
+  reason          TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT,
+  reversed_at     INTEGER,
+  reversed_by     TEXT,
+  reversal_reason TEXT,
+  recorded_at     INTEGER NOT NULL,
+  created_by      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS adjustment_scope ON adjustment (company_id, effective_date);
+CREATE UNIQUE INDEX IF NOT EXISTS adjustment_idempotency_once
+  ON adjustment (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS allocation (
+  id              TEXT PRIMARY KEY,
+  company_id      TEXT NOT NULL,
+  source_kind     TEXT NOT NULL CHECK (source_kind IN ('payment', 'adjustment')),
+  source_id       TEXT NOT NULL,
+  target_kind     TEXT NOT NULL CHECK (target_kind IN ('receivable', 'payable')),
+  target_id       TEXT NOT NULL,
+  amount_cents    INTEGER NOT NULL CHECK (amount_cents > 0),
+  reversed_at     INTEGER,
+  reversed_by     TEXT,
+  reversal_reason TEXT,
+  recorded_at     INTEGER NOT NULL,
+  created_by      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS allocation_target ON allocation (company_id, target_id);
+CREATE INDEX IF NOT EXISTS allocation_source ON allocation (company_id, source_kind, source_id);
+
+-- Recurring obligations: a schedule, and one row per occurrence that has
+-- been resolved (generated or linked). Preview is pure computation from the
+-- schedule, never stored, so pause/end/edit can never leave a stale "future"
+-- row behind. A generated occurrence's payable is an ordinary payable row
+-- — an independent snapshot, exactly like any manually entered bill — so
+-- editing or pausing the schedule afterward can never rewrite it.
+CREATE TABLE IF NOT EXISTS recurring_obligation (
+  id                       TEXT PRIMARY KEY,
+  company_id               TEXT NOT NULL,
+  counterparty_id          TEXT NOT NULL,
+  category                 TEXT NOT NULL CHECK (category IN ('payroll', 'rent', 'utilities', 'other')),
+  amount_cents             INTEGER NOT NULL CHECK (amount_cents > 0),
+  schedule                 TEXT NOT NULL CHECK (schedule IN ('weekly', 'monthly')),
+  -- weekly: 0 (Sun) - 6 (Sat). monthly: 1-31; a day past the month's last
+  -- day clamps to the month's actual last day (the one explicit, documented
+  -- month-end rule — never silently skipped or rolled to the next month).
+  schedule_day             INTEGER NOT NULL,
+  start_date                TEXT NOT NULL,
+  end_date                  TEXT,
+  is_payroll                INTEGER NOT NULL DEFAULT 0,
+  -- Days before the due date the bank file locks, mirroring payable.payroll_lock_date.
+  payroll_lock_offset_days  INTEGER,
+  status                    TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'ended')),
+  created_at                INTEGER NOT NULL,
+  created_by                TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recurring_obligation_scope ON recurring_obligation (company_id);
+
+CREATE TABLE IF NOT EXISTS recurring_occurrence (
+  id            TEXT PRIMARY KEY,
+  recurring_id  TEXT NOT NULL,
+  company_id    TEXT NOT NULL,
+  due_date      TEXT NOT NULL,
+  payable_id    TEXT NOT NULL,
+  -- 'generated': this occurrence's own payable, created from the schedule.
+  -- 'linked': an existing manual/imported payable, pointed at explicitly so
+  -- it counts once instead of being duplicated by generation.
+  origin        TEXT NOT NULL CHECK (origin IN ('generated', 'linked')),
+  created_at    INTEGER NOT NULL,
+  created_by    TEXT NOT NULL
+);
+-- The real duplicate guard: one occurrence per schedule per date, whichever
+-- path resolved it, enforced by the database, not by application logic.
+CREATE UNIQUE INDEX IF NOT EXISTS recurring_occurrence_once ON recurring_occurrence (recurring_id, due_date);
+CREATE INDEX IF NOT EXISTS recurring_occurrence_scope ON recurring_occurrence (company_id);
+
+-- Staff invitations: recipient-bound (the email it was issued to, never
+-- "anyone with the link"), expiring, single-use. The token itself is never
+-- stored — only its hash, so a database read alone cannot forge acceptance,
+-- the same principle as the HMAC approval tokens elsewhere in this app.
+CREATE TABLE IF NOT EXISTS company_invitation (
+  id           TEXT PRIMARY KEY,
+  company_id   TEXT NOT NULL,
+  email        TEXT NOT NULL,
+  role         TEXT NOT NULL CHECK (role IN ('OWNER', 'ANALYST', 'VIEWER')),
+  token_hash   TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  created_by   TEXT NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  accepted_at  INTEGER,
+  accepted_by  TEXT,
+  revoked_at   INTEGER,
+  revoked_by   TEXT
+);
+CREATE INDEX IF NOT EXISTS company_invitation_scope ON company_invitation (company_id);
+CREATE INDEX IF NOT EXISTS company_invitation_token ON company_invitation (token_hash);
+
 CREATE TABLE IF NOT EXISTS company_policy (
   company_id     TEXT NOT NULL,
   key            TEXT NOT NULL,

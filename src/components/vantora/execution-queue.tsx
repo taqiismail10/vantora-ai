@@ -40,7 +40,8 @@ import { cn } from "@/lib/utils";
 
 import { executeApproved, requestApproval, scenarioOf, SessionExpiredError, simulateResponse, type Target } from "./client-api";
 import { dayDate } from "./dates";
-import { DecisionBadge, money, money2, SectionHeading, TierBadge } from "./primitives";
+import { confirmationMatches, confirmationTarget } from "./currency";
+import { DecisionBadge, SectionHeading, TierBadge, useMoney } from "./primitives";
 
 const STATUS: Record<ActionStatus, { label: string; icon: React.ReactNode; className: string }> = {
   PROPOSED: { label: "Proposed", icon: <CircleDashed className="size-3" />, className: "text-slate-700 dark:text-slate-300" },
@@ -89,6 +90,7 @@ export function ExecutionQueue({
   openPlanApproval?: boolean;
   onPlanApprovalHandled?: () => void;
 }) {
+  const { money, money2 } = useMoney();
   const can = (capability: string) => data.viewer.capabilities.includes(capability as never);
   const ex = data.execution;
   const scenario = scenarioOf(data);
@@ -438,15 +440,16 @@ function ApprovalDialog({
   onCancel: () => void;
   onConfirm: (confirmation: string, delegate: boolean) => void;
 }) {
+  const { money2, code: currency } = useMoney();
   const [typed, setTyped] = useState("");
   const [delegate, setDelegate] = useState(false);
   const expectedCents =
     pending.kind === "plan" ? pending.cashCents : (pending.action.confirmation?.expected_cents ?? 0);
   const label = pending.kind === "plan" ? pending.label : (pending.action.confirmation?.label ?? "Amount");
-  const target = (expectedCents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  // Strip grouping and any supported currency symbol before comparing.
-  const normalised = typed.replace(/[,\s$৳¥]/g, "");
-  const matches = /^\d+(\.\d{1,2})?$/.test(normalised) && Math.round(Number(normalised) * 100) === expectedCents;
+  // Grouped the way this company's figures are grouped everywhere else, so the
+  // number on screen is the number to type. No symbol: the symbol is not typed.
+  const target = confirmationTarget(expectedCents, currency);
+  const matches = confirmationMatches(typed, expectedCents);
   const actions =
     pending.kind === "plan"
       ? data.execution.actions.filter((a) => pending.actionKeys.includes(a.action_key))

@@ -16,7 +16,7 @@ import type { DashboardState } from "@/lib/dashboard-state";
 import { cn } from "@/lib/utils";
 
 import { dayDate } from "./dates";
-import { money, money2 } from "./primitives";
+import { crunchDayIndex, useMoney } from "./primitives";
 
 /** "2:00 PM" is the payroll bureau's file-lock time, not a computed value. */
 const PAYROLL_LOCK_TIME = "2:00 PM";
@@ -47,6 +47,7 @@ export function VerdictBar({
   data: DashboardState;
   onReviewPlan: () => void;
 }) {
+  const { money, money2 } = useMoney();
   const { forecast, optimization: o, state } = data;
   const band = data.profile.alert_band;
 
@@ -103,7 +104,7 @@ export function VerdictBar({
 
   // RED: the three questions a distressed owner actually has.
   const crunchDay = forecast.first_shortfall_day ?? o.crunch_day;
-  const crunchP10 = forecast.p10_trajectory[crunchDay - 1];
+  const crunchP10 = forecast.p10_trajectory[crunchDayIndex(crunchDay)];
   const crunchPayables = state.payables_ap.filter((p) => p.due_day === crunchDay);
   // The declared bank file-lock day wins over the engine's generic 72h rule:
   // the deadline is set by the payroll bureau's cutoff, not by a convention.

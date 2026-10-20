@@ -1,6 +1,7 @@
 /** Fetch helpers for `/api/company`. One place that knows the route shape. */
 
 import { SessionExpiredError } from "./client-api";
+export { formatMinor } from "./currency";
 
 export interface CompanySummary {
   id: string;
@@ -50,6 +51,7 @@ export interface ReceivableRow {
   dueDate: string;
   status: "open" | "disputed" | "cancelled";
   terms: Record<string, unknown>;
+  source: string;
 }
 
 export interface PayableRow {
@@ -63,6 +65,7 @@ export interface PayableRow {
   payrollLockDate: string | null;
   status: "open" | "disputed" | "cancelled";
   terms: Record<string, unknown>;
+  source: string;
 }
 
 export interface FacilityRow {
@@ -80,6 +83,116 @@ export interface CoverageNote {
   message: string;
 }
 
+export interface PaymentRow {
+  id: string;
+  direction: "receipt" | "disbursement";
+  counterpartyId: string | null;
+  counterpartyName: string | null;
+  amountCents: number;
+  currency: string;
+  effectiveDate: string;
+  /** False when the money was already inside an opening balance. */
+  affectsCash: boolean;
+  method: string;
+  reference: string | null;
+  allocatedCents: number;
+  unallocatedCents: number;
+  reversedAt: number | null;
+  reversalReason: string | null;
+  recordedAt: number;
+  createdBy: string;
+}
+
+export interface AdjustmentRow {
+  id: string;
+  kind: "credit_note" | "debit_note";
+  targetKind: "receivable" | "payable";
+  counterpartyId: string | null;
+  amountCents: number;
+  effectiveDate: string;
+  reason: string;
+  allocatedCents: number;
+  unallocatedCents: number;
+  reversedAt: number | null;
+  reversalReason: string | null;
+  recordedAt: number;
+  createdBy: string;
+}
+
+export interface AllocationRow {
+  id: string;
+  sourceKind: "payment" | "adjustment";
+  sourceId: string;
+  targetKind: "receivable" | "payable";
+  targetId: string;
+  amountCents: number;
+  reversedAt: number | null;
+  recordedAt: number;
+  createdBy: string;
+}
+
+export interface BalanceRow {
+  id: string;
+  kind: "receivable" | "payable";
+  originalCents: number;
+  adjustedCents: number;
+  paidCents: number;
+  remainingCents: number;
+  settled: boolean;
+}
+
+export interface Settlement {
+  payments: PaymentRow[];
+  adjustments: AdjustmentRow[];
+  allocations: AllocationRow[];
+  balances: BalanceRow[];
+  /** Payments dated on or before this are already inside an opening balance. */
+  openingCutoff: string | null;
+  netCashCents: number;
+  futureCashCents: number;
+}
+
+export interface RecurringRow {
+  id: string;
+  counterpartyId: string;
+  counterpartyName: string;
+  category: "payroll" | "rent" | "utilities" | "other";
+  amountCents: number;
+  schedule: "weekly" | "monthly";
+  scheduleDay: number;
+  startDate: string;
+  endDate: string | null;
+  isPayroll: boolean;
+  payrollLockOffsetDays: number | null;
+  status: "active" | "paused" | "ended";
+}
+
+export interface OccurrenceRow {
+  dueDate: string;
+  occurrenceId: string;
+  resolved: boolean;
+  payableId: string | null;
+  origin: "generated" | "linked" | null;
+}
+
+export interface MemberRow {
+  userId: string;
+  email: string;
+  name: string;
+  role: "OWNER" | "ANALYST" | "VIEWER";
+}
+
+export interface InvitationRow {
+  id: string;
+  email: string;
+  role: "OWNER" | "ANALYST" | "VIEWER";
+  createdAt: number;
+  expiresAt: number;
+  acceptedAt: number | null;
+  revokedAt: number | null;
+  status: "pending" | "accepted" | "revoked" | "expired";
+}
+
 export interface CompanyWorkspace {
   account: { userId: string; email: string; name: string };
   companies: CompanySummary[];
@@ -93,6 +206,10 @@ export interface CompanyWorkspace {
       payables: PayableRow[];
       facilities: FacilityRow[];
     };
+    recurring: RecurringRow[];
+    members: MemberRow[];
+    invitations: InvitationRow[];
+    settlement: Settlement;
     policies: Record<string, { value: string; effectiveFrom: string; setBy: string } | undefined>;
     coverage: CoverageNote[];
     counts: Record<string, number>;
@@ -135,16 +252,6 @@ export const CURRENCIES = [
   { code: "BDT", label: "BDT — Bangladeshi taka" },
   { code: "CNY", label: "CNY — Chinese yuan" },
 ] as const;
-
-const SYMBOL: Record<string, string> = { USD: "$", BDT: "৳", CNY: "¥" };
-const LOCALE: Record<string, string> = { USD: "en-US", BDT: "en-BD", CNY: "zh-CN" };
-
-/** Display helper for the entry screens, which know their company's currency. */
-export const formatMinor = (cents: number, currency: string) =>
-  `${cents < 0 ? "-" : ""}${SYMBOL[currency] ?? "$"}${(Math.abs(cents) / 100).toLocaleString(LOCALE[currency] ?? "en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 
 /** Switching company is a cookie plus a full reload: no stale payload survives. */
 export function switchCompany(id: string) {

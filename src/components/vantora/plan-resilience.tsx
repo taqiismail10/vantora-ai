@@ -17,10 +17,11 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import type { DashboardState } from "@/lib/dashboard-state";
 import { cn } from "@/lib/utils";
 
-import { money, money2, SectionHeading } from "./primitives";
+import { SectionHeading, useMoney } from "./primitives";
 
 /** What the counterparty says no to, and what it costs when they do. */
 export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
+  const { money, money2 } = useMoney();
   const branches = data.counterparty_fallbacks;
   const [open, setOpen] = useState(0);
   if (branches.length === 0) return null;
@@ -150,6 +151,7 @@ export function CounterpartyFallbacks({ data }: { data: DashboardState }) {
 
 /** Does the day-14 fix quietly become a day-31 problem? */
 export function EchoSolvencyCheck({ data }: { data: DashboardState }) {
+  const { money, money2 } = useMoney();
   const echo = data.post_crunch_echo_check;
   if (!echo) return null;
 

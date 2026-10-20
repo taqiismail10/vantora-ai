@@ -22,7 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { cn } from "@/lib/utils";
 
 import { probeSecurity, type SecurityProbeResult } from "./client-api";
-import { money2, SectionHeading } from "./primitives";
+import { SectionHeading, useMoney } from "./primitives";
 
 const MEMO_PRESETS: { label: string; text: string }[] = [
   {
@@ -143,6 +143,7 @@ function Tester({
 }
 
 export function RedTeamPlayground() {
+  const { money2 } = useMoney();
   const [memo, setMemo] = useState("");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<"memo" | "numbers" | null>(null);

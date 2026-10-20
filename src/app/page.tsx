@@ -5,7 +5,7 @@ import { connection } from "next/server";
 
 import { VantoraDashboard } from "@/components/vantora/dashboard";
 import { Landing } from "@/components/vantora/landing";
-import { buildDashboardState } from "@/lib/dashboard-data";
+import { buildDashboardState, CompanyNotReadyError } from "@/lib/dashboard-data";
 import { publicSignupEnabled } from "@/lib/server/auth";
 import { companiesForUser } from "@/lib/server/companies";
 import { AccessError, requireActor, requireSession } from "@/lib/server/identity";
@@ -50,8 +50,11 @@ async function Workspace() {
   try {
     initial = await buildDashboardState(actor, BASELINE_SCENARIO);
   } catch (error) {
-    // 409 means the company exists but has nothing to forecast from yet.
-    if (error instanceof AccessError && error.status === 409) redirect("/onboarding");
+    // Only "this company has nothing to forecast from yet" goes to onboarding.
+    // Any other conflict is shown, because onboarding would not resolve it and
+    // redirecting would bounce the owner between two screens.
+    if (error instanceof CompanyNotReadyError) redirect("/onboarding");
+    if (error instanceof AccessError) return <Blocked message={error.message} />;
     throw error;
   }
 

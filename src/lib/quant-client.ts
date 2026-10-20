@@ -113,9 +113,11 @@ export interface SmeFinancialState {
 }
 
 export interface WorkingCapitalMetrics {
-  days_sales_outstanding: number;
-  days_payable_outstanding: number;
-  cash_conversion_gap_days: number;
+  /** Null when monthly revenue isn't recorded — not computable, not zero. */
+  days_sales_outstanding: number | null;
+  /** Null when monthly revenue isn't recorded (COGS is derived from it) — not computable, not zero. */
+  days_payable_outstanding: number | null;
+  cash_conversion_gap_days: number | null;
   total_ar_outstanding: number;
   total_ap_due: number;
   average_daily_burn: number;
@@ -488,8 +490,9 @@ export function localForecast(state: SmeFinancialState): ForecastResult {
   // DSO is receivables over daily sales; DPO is payables over daily *COGS*.
   // Dividing AP by revenue understates DPO by the whole gross margin.
   const dailyCogs = (state.monthly_revenue * (1 - (state.gross_margin ?? 0.35))) / 30;
-  const dso = totalAr / dailyRevenue;
-  const dpo = totalAp / dailyCogs;
+  // Null, not Infinity/NaN, when revenue isn't recorded: not computable, not zero.
+  const dso = dailyRevenue > 0 ? totalAr / dailyRevenue : null;
+  const dpo = dailyCogs > 0 ? totalAp / dailyCogs : null;
   const negative = p50.findIndex((v) => v < 0);
 
   const invoiceP90: Record<string, number> = {};
@@ -511,9 +514,9 @@ export function localForecast(state: SmeFinancialState): ForecastResult {
     p50_shortfall_amount: round2(Math.max(0, buffer - Math.min(...p50))),
     shortfall_probability: Math.round((breached / N_SIMULATIONS) * 10000) / 10000,
     working_capital_metrics: {
-      days_sales_outstanding: round2(dso),
-      days_payable_outstanding: round2(dpo),
-      cash_conversion_gap_days: round2(dso - dpo),
+      days_sales_outstanding: dso === null ? null : round2(dso),
+      days_payable_outstanding: dpo === null ? null : round2(dpo),
+      cash_conversion_gap_days: dso === null || dpo === null ? null : round2(dso - dpo),
       total_ar_outstanding: round2(totalAr),
       total_ap_due: round2(totalAp),
       average_daily_burn: round2(totalAp / horizon),

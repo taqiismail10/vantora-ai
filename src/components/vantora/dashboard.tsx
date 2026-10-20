@@ -23,16 +23,13 @@ import { AuditLedger } from "./audit-ledger";
 import { fetchDashboardState, runRedTeamDrill, scenarioOf, SessionExpiredError } from "./client-api";
 import { CoveragePanel } from "./coverage-panel";
 import { LiquidityRadar } from "./liquidity-radar";
-import { DecisionBadge, SectionHeading, setDisplayCurrency, TierBadge } from "./primitives";
+import { CurrencyProvider, DecisionBadge, SectionHeading, TierBadge } from "./primitives";
 import { RecoveryOptimizer } from "./recovery-optimizer";
 import { StatusBar } from "./status-bar";
 import { ProgressRail, VerdictBar } from "./verdict-bar";
 
 export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   const [data, setData] = useState<DashboardState>(initial);
-  // Set during render, before any child formats a figure. One company's
-  // numbers are on screen at a time and switching reloads the page.
-  setDisplayCurrency(data.company.currency);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [redTeam, setRedTeam] = useState<RedTeamResult | null>(null);
@@ -100,6 +97,10 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
   };
 
   return (
+    // Every figure below is this company's, in this company's currency. The
+    // binding is per subtree, so a second render for another company cannot
+    // pick up this one's symbol.
+    <CurrencyProvider currency={data.company.currency}>
     <div className="flex min-h-full flex-col bg-slate-50 dark:bg-slate-950">
       {expired ? (
         <div role="alert" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
@@ -263,5 +264,6 @@ export function VantoraDashboard({ initial }: { initial: DashboardState }) {
         </DialogContent>
       </Dialog>
     </div>
+    </CurrencyProvider>
   );
 }

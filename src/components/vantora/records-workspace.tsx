@@ -30,6 +30,10 @@ import {
   ReceivableList,
 } from "./company-forms";
 import { CoveragePanel } from "./coverage-panel";
+import { CsvImportForm } from "./csv-import-form";
+import { MembershipSection } from "./membership-form";
+import { RecurringForm, RecurringList } from "./recurring-form";
+import { SettlementSection } from "./settlement-forms";
 
 export function RecordsWorkspace() {
   const [workspace, setWorkspace] = useState<CompanyWorkspace | null>(null);
@@ -153,6 +157,41 @@ export function RecordsWorkspace() {
       <Section title="What you owe">
         <PayableList payables={active.records.payables} currency={currency} onChanged={refresh} readOnly={readOnly} />
         {readOnly ? null : <PayableForm counterparties={active.records.counterparties} onSaved={refresh} />}
+      </Section>
+
+      <Section title="Recurring obligations">
+        <RecurringList recurring={active.recurring} payables={active.records.payables} currency={currency} onChanged={refresh} readOnly={readOnly} />
+        {readOnly ? null : <RecurringForm counterparties={active.records.counterparties} onSaved={refresh} />}
+      </Section>
+
+      {active.role === "OWNER" && !active.company.isDemo ? (
+        <Section title="Team">
+          <MembershipSection
+            members={active.members}
+            invitations={active.invitations}
+            selfUserId={workspace.account.userId}
+            onChanged={refresh}
+          />
+        </Section>
+      ) : null}
+
+      {readOnly ? null : (
+        <Section title="Import from CSV">
+          <CsvImportForm currency={currency} onImported={refresh} />
+        </Section>
+      )}
+
+      <Section title="Settlement">
+        <SettlementSection
+          settlement={active.settlement}
+          receivables={active.records.receivables}
+          payables={active.records.payables}
+          counterparties={active.records.counterparties}
+          currency={currency}
+          readOnly={readOnly}
+          canReverse={active.role === "OWNER"}
+          onChanged={refresh}
+        />
       </Section>
 
       <Section title="Financing facilities">

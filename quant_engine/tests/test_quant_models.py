@@ -86,6 +86,19 @@ def test_working_capital_metrics(apex):
     )
 
 
+def test_working_capital_metrics_are_none_not_inf_nan_without_revenue(apex):
+    """A company with monthly_revenue=0 (the onboarding default) divided by zero
+    here, producing inf/nan that Python's json module emits as literal
+    non-standard tokens — which either break JSON.parse on the Node side or,
+    for the TS mirror of this same bug, survive as real Infinity/NaN values
+    and render in the dashboard as "$NaN" / "Infinity d"."""
+    unrecorded = apex.model_copy(update={"monthly_revenue": 0.0})
+    wc = forecast(unrecorded).working_capital_metrics
+    assert wc.days_sales_outstanding is None
+    assert wc.days_payable_outstanding is None
+    assert wc.cash_conversion_gap_days is None
+
+
 def test_dpo_divides_payables_by_daily_cogs_not_daily_revenue(apex):
     """(a) DPO against revenue overstates how fast the firm pays by the whole margin."""
     assert apex.gross_margin == 0.35  # the default every existing caller inherits

@@ -158,9 +158,10 @@ class SmeFinancialStateInput(_Model):
 
 
 class WorkingCapitalMetrics(_Model):
-    days_sales_outstanding: float
-    days_payable_outstanding: float
-    cash_conversion_gap_days: float
+    # None, not inf/nan, when monthly revenue isn't recorded: not computable, not zero.
+    days_sales_outstanding: float | None
+    days_payable_outstanding: float | None
+    cash_conversion_gap_days: float | None
     total_ar_outstanding: float
     total_ap_due: float
     average_daily_burn: float

@@ -33,14 +33,46 @@ import {
   type PolicyKey,
 } from "@/lib/server/companies";
 import { companyDataset } from "@/lib/server/company-state";
+import { commitImportFromCsv, previewImportFromCsv } from "@/lib/server/csv-import";
+import {
+  acceptInvitation,
+  createInvitation,
+  listInvitations,
+  listMembers,
+  removeMember,
+  revokeInvitation,
+  setMemberRole,
+} from "@/lib/server/invitations";
+import {
+  addRecurring,
+  defaultHorizonDate,
+  deleteRecurring,
+  generateOccurrences,
+  linkOccurrence,
+  listRecurring,
+  previewOccurrences,
+  setRecurringStatus,
+  updateRecurring,
+  type RecurringStatus,
+} from "@/lib/server/recurrence";
+import { obligationBalances } from "@/lib/server/settlements";
 import {
   AccessError,
   assertSameOrigin,
   rejectIdentityFields,
   requireActor,
   requireSession,
+  type HumanRole,
 } from "@/lib/server/identity";
 import { parseCents } from "@/lib/server/money";
+import {
+  allocate,
+  recordAdjustment,
+  recordPayment,
+  reverse,
+  settlementRecords,
+  type SourceKind,
+} from "@/lib/server/settlements";
 import {
   addAccount,
   addCounterparty,
@@ -56,6 +88,8 @@ import {
   setPayableStatus,
   setReceivableStatus,
   updateCounterparty,
+  updateFacility,
+  updatePayable,
 } from "@/lib/server/records";
 
 function fail(error: unknown) {
@@ -87,6 +121,10 @@ export async function GET(request: Request) {
         company,
         role: actor.role,
         records: companyRecords(company.id),
+        recurring: listRecurring(company.id),
+        members: listMembers(company.id),
+        invitations: actor.role === "OWNER" ? listInvitations(company.id) : [],
+        settlement: settlementRecords(company.id),
         policies: getPolicies(company.id),
         coverage: dataset.coverage,
         counts: dataset.counts,
@@ -132,9 +170,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, company });
     }
 
+    // Also session-only: accepting an invitation is how an account that may
+    // belong to no company yet gains its first membership.
+    if (action === "accept_invitation") {
+      const session = await requireSession(request);
+      const result = acceptInvitation(str(payload.token), session.userId, session.email);
+      return NextResponse.json({ ok: true, ...result });
+    }
+
     // --- Everything else is scoped to one of the caller's companies -----
     const needsOwner =
-      action === "set_policy" || action === "activate" || action === "update_company" || action === "set_payroll_status";
+      action === "set_policy" ||
+      action === "activate" ||
+      action === "update_company" ||
+      action === "set_payroll_status" ||
+      // Undoing a posted financial record is an owner decision, not data entry.
+      action === "reverse" ||
+      // Who can act for this company, and as whom, is an owner decision.
+      action === "invite_member" ||
+      action === "revoke_invitation" ||
+      action === "set_member_role" ||
+      action === "remove_member";
     const actor = await requireActor(request, needsOwner ? "approve" : "draft");
     const company = getCompany(actor.businessId);
     if (!company) throw new AccessError(404, "company not found");
@@ -146,6 +202,29 @@ export async function POST(request: Request) {
     switch (action) {
       case "update_company":
         return NextResponse.json({ ok: true, company: updateCompanyProfile(company.id, payload) });
+
+      case "invite_member": {
+        const result = createInvitation(company.id, payload.email, payload.memberRole, actor.email);
+        return NextResponse.json({
+          ok: true,
+          invitation: result.invitation,
+          // Shown once, here, since only the hash is ever stored — the
+          // owner copies this themselves; this server sends nothing.
+          inviteLink: `${new URL(request.url).origin}/accept-invite?token=${encodeURIComponent(result.token)}`,
+        });
+      }
+
+      case "revoke_invitation":
+        revokeInvitation(company.id, str(payload.id), actor.email);
+        return NextResponse.json({ ok: true });
+
+      case "set_member_role":
+        setMemberRole(company.id, str(payload.memberId), str(payload.memberRole) as HumanRole);
+        return NextResponse.json({ ok: true });
+
+      case "remove_member":
+        removeMember(company.id, str(payload.memberId));
+        return NextResponse.json({ ok: true });
 
       case "set_step": {
         const step = str(payload.step) as OnboardingStep;
@@ -184,8 +263,32 @@ export async function POST(request: Request) {
         deleteReceivable(company.id, str(payload.id));
         return NextResponse.json({ ok: true });
 
+      case "csv_import_preview": {
+        const kind = str(payload.kind);
+        if (kind !== "receivable" && kind !== "payable") throw new AccessError(422, 'kind must be "receivable" or "payable"');
+        return NextResponse.json({
+          ok: true,
+          ...previewImportFromCsv(company.id, currency, kind, payload.csvText, payload.mapping),
+        });
+      }
+
+      case "csv_import_confirm": {
+        const kind = str(payload.kind);
+        if (kind !== "receivable" && kind !== "payable") throw new AccessError(422, 'kind must be "receivable" or "payable"');
+        return NextResponse.json({
+          ok: true,
+          ...commitImportFromCsv(company.id, currency, kind, payload.csvText, payload.mapping),
+        });
+      }
+
       case "add_payable":
         return NextResponse.json({ ok: true, payable: addPayable(company.id, currency, payload as never) });
+
+      case "update_payable":
+        return NextResponse.json({
+          ok: true,
+          payable: updatePayable(company.id, str(payload.id), payload as never),
+        });
 
       case "set_payable_status":
         setPayableStatus(company.id, str(payload.id), str(payload.status) as "open" | "disputed" | "cancelled");
@@ -198,8 +301,49 @@ export async function POST(request: Request) {
       case "add_facility":
         return NextResponse.json({ ok: true, facility: addFacility(company.id, currency, payload as never) });
 
+      case "update_facility":
+        return NextResponse.json({
+          ok: true,
+          facility: updateFacility(company.id, str(payload.id), currency, payload as never),
+        });
+
       case "delete_facility":
         deleteFacility(company.id, str(payload.id));
+        return NextResponse.json({ ok: true });
+
+      case "add_recurring":
+        return NextResponse.json({ ok: true, recurring: addRecurring(company.id, currency, payload as never) });
+
+      case "update_recurring":
+        return NextResponse.json({
+          ok: true,
+          recurring: updateRecurring(company.id, str(payload.id), currency, payload as never),
+        });
+
+      case "set_recurring_status": {
+        const value = str(payload.status);
+        if (value !== "active" && value !== "paused" && value !== "ended") {
+          throw new AccessError(422, 'status must be "active", "paused" or "ended"');
+        }
+        return NextResponse.json({ ok: true, recurring: setRecurringStatus(company.id, str(payload.id), value as RecurringStatus) });
+      }
+
+      case "delete_recurring":
+        deleteRecurring(company.id, str(payload.id));
+        return NextResponse.json({ ok: true });
+
+      case "preview_recurring_occurrences": {
+        const through = str(payload.through) || defaultHorizonDate();
+        return NextResponse.json({ ok: true, occurrences: previewOccurrences(company.id, str(payload.id), through) });
+      }
+
+      case "generate_recurring_occurrences": {
+        const through = str(payload.through) || defaultHorizonDate();
+        return NextResponse.json({ ok: true, ...generateOccurrences(company.id, currency, str(payload.id), through) });
+      }
+
+      case "link_recurring_occurrence":
+        linkOccurrence(company.id, str(payload.id), str(payload.dueDate), str(payload.payableId));
         return NextResponse.json({ ok: true });
 
       case "set_payroll_status": {
@@ -236,6 +380,30 @@ export async function POST(request: Request) {
         }
         setPolicy(company.id, key, value, actor.email, new Date().toISOString().slice(0, 10));
         return NextResponse.json({ ok: true });
+      }
+
+      case "record_payment": {
+        const result = recordPayment(company.id, currency, payload as never, actor.email);
+        return NextResponse.json({ ok: true, ...result, balances: [...obligationBalances(company.id).values()] });
+      }
+
+      case "record_adjustment": {
+        const result = recordAdjustment(company.id, currency, payload as never, actor.email);
+        return NextResponse.json({ ok: true, ...result, balances: [...obligationBalances(company.id).values()] });
+      }
+
+      case "allocate": {
+        const allocation = allocate(company.id, currency, payload as never, actor.email);
+        return NextResponse.json({ ok: true, allocation, balances: [...obligationBalances(company.id).values()] });
+      }
+
+      case "reverse": {
+        const kind = str(payload.kind);
+        if (kind !== "payment" && kind !== "adjustment" && kind !== "allocation") {
+          throw new AccessError(422, 'kind must be "payment", "adjustment" or "allocation"');
+        }
+        const result = reverse(company.id, kind as SourceKind | "allocation", str(payload.id), str(payload.reason), actor.email);
+        return NextResponse.json({ ok: true, ...result, balances: [...obligationBalances(company.id).values()] });
       }
 
       case "activate": {

@@ -37,13 +37,20 @@ export function CompanySwitcher({ activeId, activeName, isDemo }: { activeId: st
     };
   }, []);
 
-  if (companies.length < 2) {
-    return isDemo ? (
+  if (isDemo) {
+    return (
       <Badge variant="outline" className="border-transparent bg-slate-100 font-mono text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
         Demonstration company
       </Badge>
-    ) : null;
+    );
   }
+
+  // Still worth rendering with exactly one company: "Create another
+  // company" needs an entry point even for an account that has never had
+  // more than one, distinct from resuming this one's own onboarding.
+  if (companies.length === 0) return null;
+
+  const atLimit = companies.length >= 5;
 
   return (
     <div className="relative">
@@ -56,7 +63,6 @@ export function CompanySwitcher({ activeId, activeName, isDemo }: { activeId: st
       >
         <Building2 className="size-3.5" aria-hidden />
         <span className="max-w-[12rem] truncate">{activeName}</span>
-        {isDemo ? <span className="font-mono text-[10px] text-slate-400">demo</span> : null}
         <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} aria-hidden />
       </button>
 
@@ -90,6 +96,21 @@ export function CompanySwitcher({ activeId, activeName, isDemo }: { activeId: st
               </button>
             </li>
           ))}
+          <li role="separator" className="my-1 border-t border-slate-200 dark:border-slate-800" />
+          <li>
+            {atLimit ? (
+              <p className="px-3 py-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                This account already has the maximum of 5 companies.
+              </p>
+            ) : (
+              <a
+                href="/onboarding?new=1"
+                className="block w-full px-3 py-1.5 text-left text-[11px] font-medium text-sky-700 hover:bg-slate-100 dark:text-sky-400 dark:hover:bg-slate-800"
+              >
+                + Create another company
+              </a>
+            )}
+          </li>
         </ul>
       ) : null}
     </div>

@@ -104,13 +104,14 @@ export async function mintApproval(
   const resolved = resolve(plan, target);
   assertValid(plan, resolved.specs);
 
-  const typed = parseCents(confirmation);
+  const typed = parseCents(confirmation, plan.ctx.currency);
   if (!typed.ok) throw new AccessError(422, `Confirmation: ${typed.reason}.`);
   if (typed.cents !== resolved.confirmation.expected_cents) {
     throw new AccessError(
       422,
-      `You confirmed ${formatCents(typed.cents)}, but the ${resolved.confirmation.label.toLowerCase()} is ${formatCents(
+      `You confirmed ${formatCents(typed.cents, plan.ctx.currency)}, but the ${resolved.confirmation.label.toLowerCase()} is ${formatCents(
         resolved.confirmation.expected_cents,
+        plan.ctx.currency,
       )}. Nothing was approved.`,
     );
   }
@@ -150,6 +151,7 @@ export async function mintApproval(
     decision: "DRAFTED",
     reason: `approval minted for ${resolved.operation} (${resolved.target === "PLAN" ? "full plan" : resolved.specs[0].counterparty}), confirmed ${formatCents(
       typed.cents,
+      plan.ctx.currency,
     )}, plan ${plan.planVersion}${options.delegateToAgent ? ", delegated to the copilot for this action only" : ""}`,
     payload: { jti, operation: resolved.operation, target: resolved.target, plan_version: plan.planVersion },
     smeProfileId: plan.ctx.smeProfileId,
@@ -170,7 +172,7 @@ export async function mintApproval(
     plan_version: plan.planVersion,
     target: resolved.target,
     operation: resolved.operation,
-    confirmed: formatCents(typed.cents),
+    confirmed: formatCents(typed.cents, plan.ctx.currency),
     delegated_to: options.delegateToAgent ? AGENT_ID : null,
     seq: audit.seq,
   };

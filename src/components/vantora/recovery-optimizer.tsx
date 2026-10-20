@@ -36,11 +36,10 @@ import {
   DeterministicBadge,
   impliedApr,
   Metric,
-  money,
-  money2,
   pct,
   SectionHeading,
   TierBadge,
+  useMoney,
 } from "./primitives";
 
 /**
@@ -95,6 +94,7 @@ function PlanCard({
   recommended?: boolean;
   onApprove?: () => void;
 }) {
+  const { money2 } = useMoney();
   const risk = riskScore(data, plan);
   const apr = impliedApr(plan.total_cost, plan.cash_raised);
   const costTone = {
@@ -221,6 +221,7 @@ const COUNTERPARTY_ASSUMPTION: Record<string, string> = {
 };
 
 function PayrollBreachCallout({ data }: { data: DashboardState }) {
+  const { money } = useMoney();
   const payroll = data.state.payables_ap.find((p) => p.is_payroll);
   return (
     <div className="rounded-md border border-slate-900 bg-slate-900 px-2.5 py-2 text-slate-100 dark:border-slate-100/20">
@@ -244,6 +245,7 @@ function PayrollBreachCallout({ data }: { data: DashboardState }) {
  * lever expires. Each step names the lever that closed to cause it.
  */
 function ProcrastinationCurve({ data }: { data: DashboardState }) {
+  const { money, money2 } = useMoney();
   const points = data.procrastination_curve;
   if (points.length === 0) return null;
   const feasibleCosts = points.map((p) => p.total_cost).filter((c): c is number => c !== null);
@@ -337,6 +339,7 @@ export function RecoveryOptimizer({
   data: DashboardState;
   onApprove?: () => void;
 }) {
+  const { money, money2 } = useMoney();
   const o = data.optimization;
   const matched = o.matched_financing_options;
   const eligible = matched.filter((m) => m.eligible);

@@ -15,7 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import type { NumericalIntegrityResult } from "@/lib/security/permission-gate";
 import { cn } from "@/lib/utils";
 
-import { money2 } from "./primitives";
+import { useMoney } from "./primitives";
 
 export function AttestationPopover({
   integrity,
@@ -28,6 +28,7 @@ export function AttestationPopover({
   /** Audit entries where this same check already refused a fabricated figure. */
   blocked?: { seq: number; reason: string }[];
 }) {
+  const { money2 } = useMoney();
   const dollars = integrity.checkedDollarFigures;
   const rates = integrity.checkedPercentages;
 

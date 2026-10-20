@@ -104,17 +104,18 @@ def _working_capital(state: SmeFinancialStateInput, p50: np.ndarray) -> WorkingC
     # Dividing AP by revenue understates DPO by the whole gross margin and makes
     # the cash-conversion gap look wider than it is.
     daily_cogs = (state.monthly_revenue * (1.0 - state.gross_margin)) / 30.0
-    dso = total_ar / daily_revenue
-    dpo = total_ap / daily_cogs
+    # None, not inf/nan, when revenue isn't recorded: not computable, not zero.
+    dso = total_ar / daily_revenue if daily_revenue > 0 else None
+    dpo = total_ap / daily_cogs if daily_cogs > 0 else None
     burn = total_ap / state.horizon_days
 
     below_zero = np.flatnonzero(p50 < 0)
     runway = float(below_zero[0] + 1) if below_zero.size else float(state.horizon_days)
 
     return WorkingCapitalMetrics(
-        days_sales_outstanding=round(dso, 2),
-        days_payable_outstanding=round(dpo, 2),
-        cash_conversion_gap_days=round(dso - dpo, 2),
+        days_sales_outstanding=round(dso, 2) if dso is not None else None,
+        days_payable_outstanding=round(dpo, 2) if dpo is not None else None,
+        cash_conversion_gap_days=round(dso - dpo, 2) if dso is not None and dpo is not None else None,
         total_ar_outstanding=round(total_ar, 2),
         total_ap_due=round(total_ap, 2),
         average_daily_burn=round(burn, 2),

@@ -70,3 +70,11 @@ yarn-error.log*
 /Screenshot 2026-10-19 222937.png
 /Screenshot 2026-10-19 222947.png
 /FinTechathon.pdf
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

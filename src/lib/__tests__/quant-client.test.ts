@@ -70,10 +70,23 @@ describe("quant client", () => {
     expect(wc.days_payable_outstanding).toBeCloseTo(wc.total_ap_due / dailyCogs, 1);
     // The old denominator was strictly larger, so it reported a smaller DPO.
     expect(wc.days_payable_outstanding).toBeGreaterThan(wc.total_ap_due / (state.monthly_revenue / 30));
+    // Smart Jeans has revenue recorded, so DSO/DPO are real numbers here, not null.
     expect(wc.cash_conversion_gap_days).toBeCloseTo(
-      wc.days_sales_outstanding - wc.days_payable_outstanding,
+      wc.days_sales_outstanding! - wc.days_payable_outstanding!,
       2,
     );
+  });
+
+  it("reports DSO/DPO/cash-conversion-gap as null, not Infinity/NaN, when no revenue is recorded", () => {
+    // A real company with monthly_revenue unset (0, the onboarding default)
+    // divided by zero here, producing Infinity/NaN that survived the RSC
+    // boundary intact and rendered in the dashboard as "$NaN"/"Infinity d".
+    const state = smartJeansFinancialState();
+    state.monthly_revenue = 0;
+    const wc = localForecast(state).working_capital_metrics;
+    expect(wc.days_sales_outstanding).toBeNull();
+    expect(wc.days_payable_outstanding).toBeNull();
+    expect(wc.cash_conversion_gap_days).toBeNull();
   });
 
   it("reports a decision day 72h before the crunch and a CI around the P10", () => {

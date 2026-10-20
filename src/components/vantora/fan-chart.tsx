@@ -24,7 +24,7 @@ import {
 
 import type { DashboardState } from "@/lib/dashboard-state";
 
-import { money } from "./primitives";
+import { useMoney } from "./primitives";
 
 const COLORS = {
   p90: "#059669", // emerald-600: optimistic
@@ -59,6 +59,7 @@ export function FanChart({
   /** True = reveal P90, the band and the percentile vocabulary. */
   showQuantMath: boolean;
 }) {
+  const { money } = useMoney();
   // Recharts animates by default; honour the operating-system setting.
   const reducedMotion =
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

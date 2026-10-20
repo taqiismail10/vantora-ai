@@ -1,54 +1,50 @@
+"use client";
+
 /**
  * Shared display primitives for the Vantora dashboard.
  *
  * Colour is semantic, not decorative: emerald = healthy / verified,
  * amber = warning / awaiting a human, rose = shortfall / blocked.
+ *
+ * Money formatting is scoped to the company being rendered, through context
+ * rather than module state: the server renders many requests in one process,
+ * so a shared mutable "current currency" could let one company's figures
+ * render with another company's symbol.
  */
 
-import type { ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { PermissionTier } from "@/lib/security/permission-gate";
 
-const CURRENCY_DISPLAY: Record<string, { symbol: string; locale: string }> = {
-  USD: { symbol: "$", locale: "en-US" },
-  BDT: { symbol: "৳", locale: "en-BD" },
-  CNY: { symbol: "¥", locale: "zh-CN" },
-};
+import { makeMoney } from "./currency";
 
-// One company's figures are on screen at a time, and switching company is a
-// full page reload, so the active currency is module state set by the shell
-// during render rather than a prop threaded through 114 call sites.
-//
-// ponytail: this is safe only because the dashboard subtree contains no
-// Suspense or lazy boundary, so server-side rendering walks it in a single
-// synchronous pass and two concurrent requests cannot interleave between the
-// shell setting the currency and a child reading it. Module state is shared
-// per server process, so adding a suspending boundary inside the dashboard
-// would let one company's figures render with another's currency symbol.
-// If that is ever needed — or if two currencies must render together — move
-// this to a React context and bind the formatter per subtree.
-let activeCurrency = "USD";
+const CurrencyContext = createContext<string>("USD");
 
-/** Called by the dashboard shell during render, before any child formats money. */
-export function setDisplayCurrency(code: string) {
-  activeCurrency = CURRENCY_DISPLAY[code] ? code : "USD";
+/** Binds every figure inside it to one company's currency. */
+export function CurrencyProvider({ currency, children }: { currency: string; children: ReactNode }) {
+  return <CurrencyContext.Provider value={currency}>{children}</CurrencyContext.Provider>;
 }
 
-export const currencySymbol = () => CURRENCY_DISPLAY[activeCurrency].symbol;
+export type MoneyFormat = ReturnType<typeof makeMoney>;
 
-export const money = (value: number, maxFractionDigits = 0) => {
-  const { symbol, locale } = CURRENCY_DISPLAY[activeCurrency];
-  return `${value < 0 ? "-" : ""}${symbol}${Math.abs(value).toLocaleString(locale, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: maxFractionDigits,
-  })}`;
-};
-
-export const money2 = (value: number) => money(value, 2);
+/** Formatters bound to the company whose subtree this component renders in. */
+export function useMoney(): MoneyFormat {
+  const code = useContext(CurrencyContext);
+  return useMemo(() => makeMoney(code), [code]);
+}
 
 export const pct = (fraction: number, digits = 1) => `${(fraction * 100).toFixed(digits)}%`;
+
+/**
+ * `crunch_day` is 0 when the engine found no shortfall across any simulated
+ * trajectory — a sentinel, not a real day — so it cannot index a trajectory
+ * array directly (`trajectory[-1]` is `undefined`, which renders as `$NaN`).
+ * Clamped to day 1 (array index 0): with no crunch, that is simply today's
+ * P10, which is the figure worth showing.
+ */
+export const crunchDayIndex = (crunchDay: number) => Math.max(crunchDay - 1, 0);
 
 /** Cost as an annualised rate on the cash it raised, over a 30-day bridge. */
 export const impliedApr = (cost: number, raised: number) =>

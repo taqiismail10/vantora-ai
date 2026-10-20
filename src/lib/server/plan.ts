@@ -43,8 +43,10 @@ import {
   type StressControls,
 } from "../stress-controls";
 import { db } from "./db";
-import { AccessError } from "./identity";
-import { CURRENCY, formatCents, toCents } from "./money";
+import { getCompany } from "./companies";
+import { companyDataset } from "./company-state";
+import { AccessError, CompanyNotReadyError } from "./identity";
+import { formatCents, toCents, type CurrencyCode } from "./money";
 
 // ------------------------------------------------------------------ scenario
 
@@ -278,7 +280,7 @@ export interface CanonicalPayload {
   kind: ActionKind;
   target_id: string;
   scenario_key: string;
-  currency: typeof CURRENCY;
+  currency: CurrencyCode;
   // ar_early_discount
   face_cents?: number;
   discount_cents?: number;
@@ -346,7 +348,7 @@ function deriveSpecs(ctx: CopilotContext, key: string, records: ActionRecord[]):
       kind: action.kind,
       target_id: action.target_id,
       scenario_key: key,
-      currency: CURRENCY,
+      currency: ctx.currency,
     };
 
     if (action.kind === "ar_early_discount") {
@@ -372,7 +374,7 @@ function deriveSpecs(ctx: CopilotContext, key: string, records: ActionRecord[]):
         confirmation: { field: "discount_cents", label: "Discount you give up", expected_cents: discount },
         cash_cost_cents: discount,
         risk_charge_cents: 0,
-        effect: `${invoice.customer_name} pays ${formatCents(face - discount)} instead of ${formatCents(face)}, within ${
+        effect: `${invoice.customer_name} pays ${formatCents(face - discount, ctx.currency)} instead of ${formatCents(face, ctx.currency)}, within ${
           invoice.early_payment_settles_in_days ?? 3
         } days if accepted.`,
       });
@@ -400,9 +402,9 @@ function deriveSpecs(ctx: CopilotContext, key: string, records: ActionRecord[]):
         confirmation: { field: "deferred_cents", label: "Bill being moved", expected_cents: toCents(payable.amount) },
         cash_cost_cents: fee,
         risk_charge_cents: risk,
-        effect: `${formatCents(toCents(payable.amount))} moves from day ${payable.due_day} to day ${
+        effect: `${formatCents(toCents(payable.amount), ctx.currency)} moves from day ${payable.due_day} to day ${
           payable.due_day + days
-        } for a ${formatCents(fee)} fee, if ${payable.supplier_name} agrees.`,
+        } for a ${formatCents(fee, ctx.currency)} fee, if ${payable.supplier_name} agrees.`,
       });
     } else {
       const facility = ctx.state.financing_options.find((f) => f.id === action.target_id)!;
@@ -427,8 +429,9 @@ function deriveSpecs(ctx: CopilotContext, key: string, records: ActionRecord[]):
         confirmation: { field: "principal_cents", label: "Principal you draw", expected_cents: principal },
         cash_cost_cents: cost,
         risk_charge_cents: 0,
-        effect: `${formatCents(principal)} arrives in ${facility.funding_days} days if ${facility.provider} funds it; ${formatCents(
+        effect: `${formatCents(principal, ctx.currency)} arrives in ${facility.funding_days} days if ${facility.provider} funds it; ${formatCents(
           principal + cost,
+          ctx.currency,
         )} is repaid 30 days later.`,
       });
     }
@@ -465,19 +468,55 @@ export interface DatasetOverride {
   dataVersion: string;
   /** Prefixes the plan id, so no customer's plan reads "smartjeans". */
   planSlug: string;
+  /** The company's own books currency — never the demo's hardcoded USD. */
+  currency: CurrencyCode;
+}
+
+/**
+ * The dataset a business forecasts from.
+ *
+ * Resolved here rather than at each call site: the copilot, every `/api/action`
+ * branch and the dashboard all route through `loadPlanContext`, so deciding it
+ * in one place is what keeps a real company's plan, drafts, approvals and
+ * copilot answers on its own figures instead of the demonstration seed.
+ *
+ * Returns undefined for the demonstration company, which keeps the seeded
+ * dataset and every recorded figure that rests on it.
+ */
+function companyDatasetOverride(businessId: string): DatasetOverride | undefined {
+  const company = getCompany(businessId);
+  if (!company || company.isDemo) return undefined;
+  const dataset = companyDataset(company);
+  if (!dataset.state) {
+    const blocking = dataset.coverage.find((note) => note.level === "blocking");
+    throw new CompanyNotReadyError(blocking?.message ?? "This company has no financial data yet.");
+  }
+  return {
+    state: dataset.state,
+    profileId: company.id,
+    dataVersion: dataset.dataVersion,
+    planSlug: company.id,
+    currency: company.currency,
+  };
 }
 
 export async function loadPlanContext(
   businessId: string,
-  ref: ScenarioRef,
+  requestedRef: ScenarioRef,
   override?: DatasetOverride,
 ): Promise<PlanContext> {
+  const resolved = override ?? companyDatasetOverride(businessId);
+  // The workforce dial rewrites payroll with the demonstration plant's
+  // per-head figure, so it is held at rest for a real company's data.
+  const ref: ScenarioRef = resolved
+    ? { ...requestedRef, stress: { ...requestedRef.stress, workforce: BASELINE_STRESS.workforce } }
+    : requestedRef;
   const key = scenarioKey(ref);
-  const profileId = override ? override.profileId : (await seedSandboxDataset(ref.preset)).smeProfileId;
-  const baseState = override ? applyStress(override.state, ref.stress) : scenarioState(ref.preset, ref.stress);
+  const profileId = resolved ? resolved.profileId : (await seedSandboxDataset(ref.preset)).smeProfileId;
+  const baseState = resolved ? applyStress(resolved.state, ref.stress) : scenarioState(ref.preset, ref.stress);
   const records = listActions(businessId, key);
   // A real company carries no demonstration memos and its own plan slug.
-  const options = override ? { memos: {}, planSlug: override.planSlug } : {};
+  const options = resolved ? { memos: {}, planSlug: resolved.planSlug, currency: resolved.currency } : {};
   const base = await loadCopilotContext(baseState, profileId, ref.preset, options);
   const ctx = records.length
     ? await loadCopilotContext(applyPosition(baseState, records), profileId, ref.preset, options)
@@ -487,7 +526,7 @@ export async function loadPlanContext(
   const plan = ctx.optimization.optimal_plan;
   const planVersion = sha256(
     JSON.stringify({
-      dataset: override ? override.dataVersion : DATASET_VERSION,
+      dataset: resolved ? resolved.dataVersion : DATASET_VERSION,
       scenario: key,
       position: records.map((r) => [r.action_key, r.status]),
       feasible: plan.feasible,
@@ -617,7 +656,7 @@ function recordPlanAction(record: ActionRecord, plan: PlanContext): PlanAction {
     return {
       kind: "bridge_draw",
       target_id: record.target_id,
-      label: `Draw ${formatCents(p.principal_cents!).replace(/\.00$/, "")} from ${facility?.provider ?? record.target_id}`,
+      label: `Draw ${formatCents(p.principal_cents!, plan.ctx.currency).replace(/\.00$/, "")} from ${facility?.provider ?? record.target_id}`,
       cash_impact: p.principal_cents! / 100,
       cost: p.cost_cents! / 100,
       detail: "committed in the sandbox",
@@ -654,7 +693,7 @@ export function validateSpec(spec: ActionSpec, plan: PlanContext): string | null
   const { ctx } = plan;
   const p = spec.payload;
   if (!ctx.optimization.optimal_plan.feasible) return "the current plan is infeasible; nothing in it can be executed";
-  if (p.currency !== CURRENCY) return `only ${CURRENCY} is supported`;
+  if (p.currency !== plan.ctx.currency) return `payload currency does not match this plan`;
   const money = [p.face_cents, p.discount_cents, p.settlement_cents, p.deferred_cents, p.fee_cents, p.principal_cents, p.cost_cents]
     .filter((v): v is number => v !== undefined);
   if (money.some((v) => !Number.isSafeInteger(v) || v < 0)) return "amounts must be non-negative whole cents";
@@ -683,7 +722,7 @@ export function validateSpec(spec: ActionSpec, plan: PlanContext): string | null
     if (!screened?.eligible) return `${facility.provider} is not eligible: ${screened?.rejection_reason ?? "failed screening"}`;
     if (p.principal_cents! <= 0) return "principal must be greater than zero";
     if (p.principal_cents! > toCents(Math.min(facility.max_amount, screened.max_available))) {
-      return `${formatCents(p.principal_cents!)} exceeds the ${formatCents(toCents(screened.max_available))} available on ${facility.provider}`;
+      return `${formatCents(p.principal_cents!, ctx.currency)} exceeds the ${formatCents(toCents(screened.max_available), ctx.currency)} available on ${facility.provider}`;
     }
     if (facility.funding_days >= (ctx.optimization.crunch_day || Infinity)) {
       return `${facility.provider} funds in ${facility.funding_days} days, after the crunch`;
@@ -712,19 +751,19 @@ export function matchProposal(
     const amount = parseAmount(input.amount);
     if (!amount.ok) return { error: amount.reason };
     if (amount.cents > toCents(screened.max_available)) {
-      return { error: `${formatCents(amount.cents)} exceeds the ${formatCents(toCents(screened.max_available))} available on ${facility.provider}` };
+      return { error: `${formatCents(amount.cents, ctx.currency)} exceeds the ${formatCents(toCents(screened.max_available), ctx.currency)} available on ${facility.provider}` };
     }
     const spec = plan.specs.find((s) => s.kind === "bridge_draw" && s.target_id === id);
     if (!spec) {
       const planned = plan.specs.find((s) => s.kind === "bridge_draw");
       return {
         error: `${facility.provider} is not part of the current plan${
-          planned ? `; the plan draws ${formatCents(planned.payload.principal_cents!)} from ${planned.counterparty}` : ""
+          planned ? `; the plan draws ${formatCents(planned.payload.principal_cents!, ctx.currency)} from ${planned.counterparty}` : ""
         }`,
       };
     }
     if (spec.payload.principal_cents !== amount.cents) {
-      return { error: `amount must equal the planned draw of ${formatCents(spec.payload.principal_cents!)}` };
+      return { error: `amount must equal the planned draw of ${formatCents(spec.payload.principal_cents!, ctx.currency)}` };
     }
     return { spec };
   }

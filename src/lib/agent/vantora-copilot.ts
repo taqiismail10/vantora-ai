@@ -30,6 +30,7 @@ import {
   type ScenarioPresetId,
 } from "../sandbox/seed-data";
 import { counterpartyFallbacks } from "../recovery-scenarios";
+import { CURRENCY, type CurrencyCode } from "../server/money";
 import {
   detectIndirectPromptInjection,
   enforcePermissionGate,
@@ -55,6 +56,9 @@ export interface CopilotContext {
    * can never surface the demonstration company's planted text.
    */
   memos: Record<string, string>;
+  /** The company's own books currency. Defaults to the demonstration
+   * company's USD; a real company's own override always sets it. */
+  currency: CurrencyCode;
 }
 
 /** Short, stable plan slugs. The HMAC approval token binds to this string. */
@@ -82,7 +86,7 @@ export async function loadCopilotContext(
   state?: SmeFinancialState,
   smeProfileId: string = IN_MEMORY_PROFILE_ID,
   sandboxProfile: ScenarioPresetId = DEFAULT_SCENARIO_PRESET,
-  options: { memos?: Record<string, string>; planSlug?: string } = {},
+  options: { memos?: Record<string, string>; planSlug?: string; currency?: CurrencyCode } = {},
 ): Promise<CopilotContext> {
   const resolved = state ?? scenarioState(sandboxProfile);
   const forecast = await forecastCashFlow(resolved);
@@ -95,6 +99,7 @@ export async function loadCopilotContext(
     smeProfileId,
     sandboxProfile,
     memos: options.memos ?? SCENARIO_PRESETS[sandboxProfile].memos,
+    currency: options.currency ?? CURRENCY,
   };
 }
 
@@ -369,6 +374,12 @@ const money = (value: number) =>
   })}`;
 
 const pct = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
+
+/** DSO/DPO are null when monthly revenue isn't recorded — not computable, not zero. */
+const dsoDpoParenthetical = (wc: { days_sales_outstanding: number | null; days_payable_outstanding: number | null }) =>
+  wc.days_sales_outstanding === null || wc.days_payable_outstanding === null
+    ? "no monthly revenue recorded, so DSO/DPO are not shown"
+    : `DSO ${wc.days_sales_outstanding} days vs DPO ${wc.days_payable_outstanding} days`;
 
 const PLANT = SMART_JEANS_PROFILE.companyName.replace(/\.$/, "");
 
@@ -692,9 +703,7 @@ export function synthesizeNarrative(ctx: CopilotContext): string {
         `${f.n_simulations.toLocaleString()} seeded Monte Carlo trajectories (seed ${f.seed}) the P10 cash line`,
         `never breaks the buffer, ending the ${f.horizon_days}-day horizon at`,
         `${money(plan.post_recovery_p10_balance)} with a ${pct(f.shortfall_probability)} probability of a breach`,
-        `at any point. Receivables are staggered against outflows (DSO`,
-        `${f.working_capital_metrics.days_sales_outstanding} days vs DPO`,
-        `${f.working_capital_metrics.days_payable_outstanding} days).`,
+        `at any point. Receivables are staggered against outflows (${dsoDpoParenthetical(f.working_capital_metrics)}).`,
       ].join(" "),
       [
         `**Recommended plan — ${money(plan.total_cost)}.**`,
@@ -752,8 +761,7 @@ export function synthesizeNarrative(ctx: CopilotContext): string {
       `${pct(f.shortfall_probability)} probability of breaching the`,
       `buffer somewhere in the ${f.horizon_days}-day horizon. The cause is a collision, not a trend: payroll`,
       `and a line-stop tooling bill both fall due on day ${o.crunch_day} while receivables are still in`,
-      `transit (DSO ${f.working_capital_metrics.days_sales_outstanding} days vs DPO`,
-      `${f.working_capital_metrics.days_payable_outstanding} days).`,
+      `transit (${dsoDpoParenthetical(f.working_capital_metrics)}).`,
     ].join(" "),
     [
       `**Recommended plan — ${money(split.cash)} in cash, plus a ${money(split.risk)} modelled relationship-risk`,

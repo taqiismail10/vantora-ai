@@ -154,6 +154,7 @@ describe("custom security probe screens", () => {
     smeProfileId: "test",
     sandboxProfile: "SOLVABLE_DAY14_CRUNCH",
     memos: {},
+    currency: "USD",
   });
 
   it("passes a benign memo and quarantines an adversarial one", () => {

@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +54,9 @@ export function Onboarding() {
   const [workspace, setWorkspace] = useState<CompanyWorkspace | null>(null);
   const [step, setStep] = useState<Step | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from resuming the active company: `?new=1` is the explicit
+  // "Create another company" path, reached only from the company switcher.
+  const creatingAnother = useSearchParams().get("new") === "1";
 
   const apply = useCallback((next: CompanyWorkspace) => {
     setWorkspace(next);
@@ -106,11 +110,26 @@ export function Onboarding() {
     );
   }
 
-  // No company at all: the only thing to do is create one.
-  if (!workspace.active || workspace.companies.length === 0) {
+  // No company at all, or the owner explicitly asked to add another one:
+  // either way, the only thing to do is create one. Distinct from resuming
+  // the active company's own onboarding, which the branch below handles.
+  if (!workspace.active || workspace.companies.length === 0 || creatingAnother) {
     return (
       <Shell>
-        <CreateCompany onCreated={load} />
+        <CreateCompany
+          onCreated={async (newCompanyId) => {
+            if (creatingAnother) {
+              // Select the one just created, the same mechanism the company
+              // switcher uses, so the next load resumes *its* onboarding —
+              // never the company the owner was already working in.
+              document.cookie = `vantora_company=${encodeURIComponent(newCompanyId)}; path=/; SameSite=Lax; max-age=${60 * 60 * 24 * 365}`;
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload so the new company's data starts clean
+              window.location.assign("/onboarding");
+              return;
+            }
+            await load();
+          }}
+        />
       </Shell>
     );
   }
@@ -256,7 +275,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function CreateCompany({ onCreated }: { onCreated: () => Promise<void> }) {
+function CreateCompany({ onCreated }: { onCreated: (newCompanyId: string) => Promise<void> }) {
   const [name, setName] = useState("");
   const [industry, setIndustry] = useState("");
   const [country, setCountry] = useState("");
@@ -269,8 +288,8 @@ function CreateCompany({ onCreated }: { onCreated: () => Promise<void> }) {
     setBusy(true);
     setError(null);
     try {
-      await companyAction("create_company", { name, industry, country, currency });
-      await onCreated();
+      const result = await companyAction<{ company: { id: string } }>("create_company", { name, industry, country, currency });
+      await onCreated(result.company.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

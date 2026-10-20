@@ -37,7 +37,7 @@ export function parseDate(value: unknown, field: string): string {
   return date;
 }
 
-function amountCents(value: unknown, currency: CurrencyCode, field: string): number {
+export function amountCents(value: unknown, currency: CurrencyCode, field: string): number {
   const parsed = parseCents(value, currency);
   if (!parsed.ok) throw new AccessError(422, `${field}: ${parsed.reason}`);
   return parsed.cents;
@@ -50,7 +50,7 @@ const label = (value: unknown, field: string, max = 120): string => {
   return clean.slice(0, max);
 };
 
-const optionalText = (value: unknown, max = 120): string =>
+export const optionalText = (value: unknown, max = 120): string =>
   typeof value === "string" ? value.trim().replace(/[\p{Cc}\p{Cf}]/gu, "").slice(0, max) : "";
 
 const num = (value: unknown): number | undefined => {
@@ -473,9 +473,10 @@ export interface PayableInput {
   status?: unknown;
 }
 
-function payableTerms(input: PayableInput, profile: Record<string, unknown>): Record<string, unknown> {
-  // The supplier profile seeds the snapshot; explicit per-bill values win.
-  const terms: Record<string, unknown> = { ...profile };
+/** The per-bill terms a caller may set, whether seeding a new bill from its
+ * supplier's profile or overriding an existing one directly. Anything not
+ * provided is left as whatever `terms` already held — never reset. */
+function applyPayableTermOverrides(terms: Record<string, unknown>, input: PayableInput): Record<string, unknown> {
   if (input.isFlexible !== undefined) terms.is_flexible = bool(input.isFlexible);
   const maxDeferral = clamp(num(input.maxDeferralDays), 0, 180);
   if (maxDeferral !== undefined) terms.max_deferral_days = Math.round(maxDeferral);
@@ -487,6 +488,11 @@ function payableTerms(input: PayableInput, profile: Record<string, unknown>): Re
   if (risk !== undefined) terms.relationship_risk = risk;
   if (input.isCritical !== undefined) terms.is_critical = bool(input.isCritical);
   return terms;
+}
+
+function payableTerms(input: PayableInput, profile: Record<string, unknown>): Record<string, unknown> {
+  // The supplier profile seeds the snapshot; explicit per-bill values win.
+  return applyPayableTermOverrides({ ...profile }, input);
 }
 
 export function addPayable(companyId: string, currency: CurrencyCode, input: PayableInput): Payable {
@@ -547,6 +553,56 @@ export function setPayableStatus(companyId: string, id: string, next: "open" | "
   if (changed.changes === 0) throw new AccessError(404, "bill not found");
 }
 
+/**
+ * Override one obligation's own deferral/criticality terms directly.
+ *
+ * A supplier-default edit (`updateCounterparty`) never touches a posted
+ * bill's terms — that is what keeps a later profile change from rewriting
+ * history. This is the other half: an explicit edit to *this* bill's own
+ * terms, which is exactly what the next solve should pick up, since
+ * `payable.terms` is read live and is already part of the company's
+ * `dataVersion` fingerprint — no separate invalidation step is needed.
+ */
+export function updatePayable(companyId: string, id: string, input: PayableInput): Payable {
+  const row = db()
+    .prepare(
+      `SELECT p.*, c.name AS counterparty_name FROM payable p
+       JOIN counterparty c ON c.id = p.counterparty_id
+       WHERE p.company_id = ? AND p.id = ?`,
+    )
+    .get(companyId, id) as
+    | {
+        id: string;
+        counterparty_id: string;
+        counterparty_name: string;
+        external_id: string | null;
+        amount_cents: number;
+        due_date: string;
+        terms_json: string;
+        is_payroll: number;
+        payroll_lock_date: string | null;
+        status: "open" | "disputed" | "cancelled";
+        source: string;
+      }
+    | undefined;
+  if (!row) throw new AccessError(404, "bill not found");
+  const terms = applyPayableTermOverrides(json(row.terms_json), input);
+  db().prepare("UPDATE payable SET terms_json = ? WHERE company_id = ? AND id = ?").run(JSON.stringify(terms), companyId, id);
+  return {
+    id: row.id,
+    counterpartyId: row.counterparty_id,
+    counterpartyName: row.counterparty_name,
+    externalId: row.external_id,
+    amountCents: row.amount_cents,
+    dueDate: row.due_date,
+    terms,
+    isPayroll: row.is_payroll === 1,
+    payrollLockDate: row.payroll_lock_date,
+    status: row.status,
+    source: row.source,
+  };
+}
+
 export function deletePayable(companyId: string, id: string): void {
   db().prepare("DELETE FROM payable WHERE company_id = ? AND id = ?").run(companyId, id);
 }
@@ -585,17 +641,40 @@ export function listFacilities(companyId: string): Facility[] {
   }));
 }
 
-export interface FacilityInput {
-  provider: unknown;
-  productType: unknown;
-  maxAmount: unknown;
-  apr: unknown;
+interface FacilityTermFields {
   fundingDays?: unknown;
   originationFeePct?: unknown;
   requiresArCollateral?: unknown;
   arCoverageRatio?: unknown;
   isExistingFacility?: unknown;
   minCreditScore?: unknown;
+}
+
+export interface FacilityInput extends FacilityTermFields {
+  provider: unknown;
+  productType: unknown;
+  maxAmount: unknown;
+  apr: unknown;
+}
+
+/** The eligibility/fee terms a caller may set, whether seeding a new facility
+ * or overriding an existing one. Anything not provided is left as `terms`
+ * already held — never reset. `funding_days`/`is_existing_facility` are set
+ * directly by the caller rather than folded in here, since `addFacility`
+ * always provides them (with a default) while `updateFacility` only touches
+ * what is given. */
+function applyFacilityTermOverrides(terms: Record<string, unknown>, input: FacilityTermFields): Record<string, unknown> {
+  const fee = clamp(num(input.originationFeePct), 0, 1);
+  if (fee !== undefined) terms.origination_fee_pct = fee;
+  if (input.requiresArCollateral !== undefined) terms.requires_ar_collateral = bool(input.requiresArCollateral);
+  const coverage = clamp(num(input.arCoverageRatio), 0, 10);
+  if (coverage !== undefined) terms.ar_coverage_ratio = coverage;
+  const minScore = clamp(num(input.minCreditScore), 0, 1000);
+  if (minScore !== undefined) terms.min_credit_score = Math.round(minScore);
+  if (input.isExistingFacility !== undefined) terms.is_existing_facility = bool(input.isExistingFacility);
+  const fundingDays = clamp(num(input.fundingDays), 0, 180);
+  if (fundingDays !== undefined) terms.funding_days = Math.round(fundingDays);
+  return terms;
 }
 
 export function addFacility(companyId: string, currency: CurrencyCode, input: FacilityInput): Facility {
@@ -608,18 +687,10 @@ export function addFacility(companyId: string, currency: CurrencyCode, input: Fa
   if (apr === undefined) throw new AccessError(422, "APR is required, as a fraction (0.18 for 18%)");
   // Funding speed decides whether a facility can reach a dated obligation at
   // all, so an unstated value is treated as slow rather than instant.
-  const fundingDays = clamp(num(input.fundingDays), 0, 180) ?? 30;
-  const terms: Record<string, unknown> = {
-    funding_days: Math.round(fundingDays),
-    is_existing_facility: bool(input.isExistingFacility),
-  };
-  const fee = clamp(num(input.originationFeePct), 0, 1);
-  if (fee !== undefined) terms.origination_fee_pct = fee;
-  if (input.requiresArCollateral !== undefined) terms.requires_ar_collateral = bool(input.requiresArCollateral);
-  const coverage = clamp(num(input.arCoverageRatio), 0, 10);
-  if (coverage !== undefined) terms.ar_coverage_ratio = coverage;
-  const minScore = clamp(num(input.minCreditScore), 0, 1000);
-  if (minScore !== undefined) terms.min_credit_score = Math.round(minScore);
+  const terms = applyFacilityTermOverrides(
+    { funding_days: 30, is_existing_facility: bool(input.isExistingFacility) },
+    input,
+  );
 
   const id = randomUUID();
   db()
@@ -628,6 +699,44 @@ export function addFacility(companyId: string, currency: CurrencyCode, input: Fa
     )
     .run(id, companyId, provider, input.productType, maxAmount, apr, JSON.stringify(terms), Date.now());
   return { id, provider, productType: input.productType, maxAmountCents: maxAmount, apr, terms };
+}
+
+export interface FacilityUpdateInput extends FacilityTermFields {
+  provider?: unknown;
+  /** The facility's total contractual ceiling — never "currently available",
+   * which is computed live (minus AR-coverage caps and already-settled
+   * draws) wherever a plan is built, and is never stored. */
+  maxAmount?: unknown;
+  apr?: unknown;
+}
+
+/**
+ * Edits an existing facility's own limit, rate, fees and eligibility terms.
+ *
+ * Changes what the *next* forecast and solve read (`financing_facility` is
+ * part of the company's `dataVersion` fingerprint), never an obligation
+ * already drawn: `action_execution.payload_json` freezes the `apr` and
+ * `funding_days` that applied at the moment a draw was approved, and this
+ * never touches that table.
+ */
+export function updateFacility(companyId: string, id: string, currency: CurrencyCode, input: FacilityUpdateInput): Facility {
+  const row = db()
+    .prepare("SELECT * FROM financing_facility WHERE company_id = ? AND id = ?")
+    .get(companyId, id) as
+    | { id: string; provider: string; product_type: string; max_amount_cents: number; apr: number; terms_json: string }
+    | undefined;
+  if (!row) throw new AccessError(404, "facility not found");
+
+  const provider = input.provider === undefined ? row.provider : label(input.provider, "lender name", 80);
+  const maxAmount = input.maxAmount === undefined ? row.max_amount_cents : amountCents(input.maxAmount, currency, "facility limit");
+  const apr = input.apr === undefined ? row.apr : clamp(num(input.apr), 0, 5);
+  if (apr === undefined) throw new AccessError(422, "APR must be a fraction between 0 and 5 (0.18 for 18%)");
+  const terms = applyFacilityTermOverrides(json(row.terms_json), input);
+
+  db()
+    .prepare("UPDATE financing_facility SET provider = ?, max_amount_cents = ?, apr = ?, terms_json = ? WHERE company_id = ? AND id = ?")
+    .run(provider, maxAmount, apr, JSON.stringify(terms), companyId, id);
+  return { id: row.id, provider, productType: row.product_type, maxAmountCents: maxAmount, apr, terms };
 }
 
 export function deleteFacility(companyId: string, id: string): void {

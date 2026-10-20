@@ -32,7 +32,7 @@ import { BuyerPortalPreview } from "./buyer-portal";
 import { askCopilotQuestion, runTool, scenarioOf } from "./client-api";
 import { ExecutionQueue } from "./execution-queue";
 import { AttestationPopover } from "./attestation";
-import { AttestedBadge, DecisionBadge, DeterministicBadge, money, SectionHeading, TierBadge } from "./primitives";
+import { AttestedBadge, DecisionBadge, DeterministicBadge, SectionHeading, TierBadge, useMoney } from "./primitives";
 
 interface Draft {
   tool: string;
@@ -106,6 +106,7 @@ export function ActionCenter({
   openPlanApproval?: boolean;
   onPlanApprovalHandled?: () => void;
 }) {
+  const { money } = useMoney();
   const canDraft = data.viewer.capabilities.includes("draft");
   const canAsk = data.viewer.capabilities.includes("analyze");
   const scenario = scenarioOf(data);
